@@ -79,6 +79,10 @@ run.
   layer without taking tenants offline (livepatch, planned reboot windows,
   snapshot-first), hardening beyond the base setup, detection, recovery,
   and a compromise playbook.
+- ❓ `FAQ.md` — troubleshooting the problems you'll actually hit: nested
+  Docker storage drivers, `systemctl --user` bus errors, tunnel 404/502s,
+  headless `cloudflared` login, ZFS ARC memory, capacity planning, tenant
+  migration, and accidental deletes.
 - ⚙️ `ansible/` — a role that automates most of this: host prep (ZFS, Incus,
   default-deny firewall) and per-tenant provisioning (container, ZFS volume,
   resource limits, rootless Docker, Cloudflare Tunnel config skeleton). See
