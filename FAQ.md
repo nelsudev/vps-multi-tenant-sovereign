@@ -189,17 +189,39 @@ after reserving for the host and ZFS ARC. CPU oversubscribes gracefully
 
 ### How do I move a tenant to a new/bigger VPS?
 
+`incus move` carries the whole container — rootfs, config (limits, nesting,
+devices), snapshots, and everything inside it (the `app` user, rootless
+Docker, `cloudflared` with its tunnel credentials). Two things it does
+**not** cover:
+
+- The **data volume** is a separate object — copy it explicitly.
+- The **new host** needs the base setup first (Incus + ZFS + firewall) —
+  that's exactly the `incus_host` Ansible role: one playbook run and it's
+  ready to receive tenants.
+
 ```bash
-# old host → new host (both running Incus)
+# new host: ansible-playbook site.yml (incus_host role only)
+# old host:
 incus remote add newbox <ip-or-name>
 incus stop tenant-a
 incus move tenant-a newbox:tenant-a
-incus start newbox:tenant-a
+incus storage volume copy default/tenant-a-data newbox:default/tenant-a-data
+# new host: re-attach the volume, then start
+incus config device add tenant-a data disk \
+  pool=default source=tenant-a-data path=/data
+incus start tenant-a
 ```
 
-The Cloudflare Tunnel reconnects from the new box automatically — no DNS
-changes, since tunnels are outbound. This is the payoff of the
-no-open-ports design: migrations don't involve IP changes at all.
+**Minimizing downtime**: the volume copy dominates the window. Pre-seed it
+with an incremental `zfs send | ssh newbox zfs recv` while the tenant is
+still running, then stop the tenant and send only the final delta — the
+outage shrinks to seconds regardless of volume size.
+
+After start, the Cloudflare Tunnel reconnects from the new box
+automatically — no DNS changes, no IP reconfiguration, since tunnels are
+outbound and the credentials traveled inside the container. The tenant
+never knows it moved. And because it's per-tenant, you can upgrade servers
+one tenant at a time — no big-bang migration.
 
 ### Ansible run fails halfway — is it safe to re-run?
 

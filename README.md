@@ -83,6 +83,10 @@ run.
   Docker storage drivers, `systemctl --user` bus errors, tunnel 404/502s,
   headless `cloudflared` login, ZFS ARC memory, capacity planning, tenant
   migration, and accidental deletes.
+- 🤖 `.claude/skills/` — Claude Code skills for the two recurring operations:
+  `new-tenant` (provision + neighbor test) and `migrate-tenant` (move a
+  tenant to another host with near-zero downtime). Each skill documents its
+  origin (which doc sections it distills) so it can be kept in sync.
 - ⚙️ `ansible/` — a role that automates most of this: host prep (ZFS, Incus,
   default-deny firewall) and per-tenant provisioning (container, ZFS volume,
   resource limits, rootless Docker, Cloudflare Tunnel config skeleton). See
