@@ -129,3 +129,45 @@
 - name: Enable ufw
   community.general.ufw:
     state: enabled
+
+- name: Install unattended upgrades
+  ansible.builtin.apt:
+    name: unattended-upgrades
+    state: present
+  when: incus_host_enable_unattended_upgrades | bool
+
+- name: Enable unattended security upgrades
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    mode: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+  when: incus_host_enable_unattended_upgrades | bool
+
+- name: Disable unattended automatic reboots
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/51vps-sovereign-unattended
+    mode: "0644"
+    content: |
+      Unattended-Upgrade::Automatic-Reboot "false";
+  when: incus_host_enable_unattended_upgrades | bool
+
+- name: Configure host kernel hardening sysctls
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/90-vps-sovereign-hardening.conf
+    mode: "0644"
+    content: |
+      kernel.unprivileged_bpf_disabled = 1
+      kernel.kptr_restrict = 2
+      kernel.dmesg_restrict = 1
+      net.ipv4.conf.all.rp_filter = 1
+  register: incus_host_sysctl_hardening
+  when: incus_host_apply_sysctl_hardening | bool
+
+- name: Apply host kernel hardening sysctls
+  ansible.builtin.command: sysctl --system
+  changed_when: incus_host_sysctl_hardening.changed
+  when:
+    - incus_host_apply_sysctl_hardening | bool
+    - incus_host_sysctl_hardening.changed

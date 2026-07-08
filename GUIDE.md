@@ -166,8 +166,10 @@ never touches tenant-b's network config.
 ```bash
 # install cloudflared inside the container
 curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg \
-  | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
-# (cloudflared apt repo) → apt install cloudflared
+  -o /usr/share/keyrings/cloudflare-main.gpg
+echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main' \
+  > /etc/apt/sources.list.d/cloudflared.list
+apt update && apt -y install cloudflared
 
 cloudflared tunnel login
 cloudflared tunnel create tenant-a
@@ -218,6 +220,11 @@ ssh -o ProxyCommand="cloudflared access ssh --hostname %h" \
   app@ssh-a.yourdomain.tld
 ```
 
+The Ansible defaults harden the tenant's `sshd` to disallow passwords and
+root login. Add public keys under `tenant.ssh_authorized_keys` in
+`ansible/group_vars/all.yml` if you want direct `app` SSH after the tunnel is
+live.
+
 ## 06 · Persistent storage & backups
 
 ```bash
@@ -256,6 +263,9 @@ Final host hardening checklist:
 - **Default-deny inbound firewall** — with a Cloudflare Tunnel you don't
   need any open port (not even 80/443). Host SSH only over WireGuard, if
   using Option B.
+- **Host unattended-upgrades + sysctl hardening** — automated by the Ansible
+  role defaults. `hidepid=2` remains a manual host decision because it can
+  affect monitoring and service managers.
 - **Confirm unprivileged** — `incus config get tenant-a
   security.privileged` must return `false`/empty.
 - **No sudo for `app`** — after provisioning, remove the user from any

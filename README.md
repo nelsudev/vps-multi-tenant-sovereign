@@ -97,15 +97,17 @@ run.
   tenant to another host with near-zero downtime). Each skill documents its
   origin (which doc sections it distills) so it can be kept in sync.
 - ⚙️ `ansible/` — a role that automates most of this: host prep (explicit
-  ZFS-backed Incus init, NAT bridge, UFW), per-tenant dedicated bridges, ZFS
-  volumes, resource limits, rootless Docker, and a Cloudflare Tunnel config
+  ZFS-backed Incus init, NAT bridge, UFW, unattended-upgrades, sysctl
+  hardening), per-tenant dedicated bridges, ZFS volumes, resource limits,
+  rootless Docker, installed `cloudflared`, and a Cloudflare Tunnel config
   skeleton. See `ansible/group_vars/all.yml` to define tenants and limits.
 
 ## 🔐 Note on the Cloudflare Tunnel step
 
-`cloudflared tunnel login` / `tunnel create` require interactive browser
-auth against a Cloudflare account, so that step is intentionally left
-manual (documented in the guide) rather than baked into Ansible.
+The Ansible role installs `cloudflared`, but `cloudflared tunnel login` /
+`tunnel create` require interactive browser auth against a Cloudflare
+account. That credential-bearing step is intentionally manual and documented
+in the guide.
 
 ## ✨ Made with Claude Fable
 

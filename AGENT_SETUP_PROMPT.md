@@ -40,12 +40,13 @@ Do this:
    exact commands to run per tenant (or point me at the remotely-managed
    tunnel token flow from FAQ.md, whichever is simpler for me to execute),
    then wait for me to paste back the tunnel is live before continuing.
-7. Apply the hardening from SECURITY.md §2: hidepid=2, the sysctl
-   hardening block, and dedicated bridge per tenant for lateral traffic
-   blocking.
-8. Set up unattended-upgrades on the host per SECURITY.md §1, and tell me
-   whether this VPS is eligible for Ubuntu Pro's free tier so I can enable
-   Livepatch.
+7. Verify the hardening from SECURITY.md §2: the Ansible defaults apply the
+   sysctl hardening block and dedicated bridge per tenant. Treat hidepid=2
+   as a deliberate manual host change after confirming it won't break
+   monitoring or service management.
+8. Verify unattended-upgrades are enabled on the host per SECURITY.md §1,
+   and tell me whether this VPS is eligible for Ubuntu Pro's free tier so I
+   can enable Livepatch.
 9. Give me a final report: what's running, what each tenant's resource
    budget is, what still needs my manual action (tunnels, Livepatch
    token), and the exact verification commands I can re-run anytime to

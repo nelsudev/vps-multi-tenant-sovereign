@@ -24,11 +24,13 @@ description: Use when adding a new isolated tenant to the multi-tenant VPS — c
 
 Follow GUIDE.md §02 → §05 in order: launch (unprivileged + nesting +
 limits), ZFS volume attach at `/data`, `app` user with linger, rootless
-Docker with `data-root` on `/data/docker`, cloudflared config.
+Docker with `data-root` on `/data/docker`, install `cloudflared`, and lay
+down the tunnel config skeleton.
 
 ## Always-manual step: the Cloudflare Tunnel
 
-Tunnel creation needs interactive auth — it cannot be in Ansible:
+The package is installed by Ansible, but tunnel creation needs interactive
+auth and cannot be in Ansible:
 
 ```bash
 incus exec <tenant> -- su - app

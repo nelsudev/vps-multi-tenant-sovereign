@@ -38,6 +38,9 @@ running containers in recent versions, but verify per version).
 
 ### Host userspace: automate it
 
+The Ansible role installs and enables unattended upgrades by default, with
+automatic reboots disabled. Manually, the equivalent is:
+
 ```bash
 apt -y install unattended-upgrades
 dpkg-reconfigure -plow unattended-upgrades
@@ -131,6 +134,11 @@ net.ipv4.conf.all.rp_filter = 1
 EOF
 sysctl --system
 ```
+
+The Ansible role applies the sysctl block by default. It does not remount
+`/proc` with `hidepid=2` automatically, because that can affect host-level
+monitoring and service managers; apply it deliberately after testing your
+admin path.
 
 - Keep containers **unprivileged always** — audit with:
 
