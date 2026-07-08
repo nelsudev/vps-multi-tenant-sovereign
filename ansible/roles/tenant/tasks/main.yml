@@ -1,0 +1,6 @@
+---
+- name: Provision each tenant
+  ansible.builtin.include_tasks: tenant.yml
+  loop: "{{ tenants }}"
+  loop_control:
+    loop_var: tenant

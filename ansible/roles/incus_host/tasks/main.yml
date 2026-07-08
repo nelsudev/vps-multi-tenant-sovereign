@@ -1,0 +1,69 @@
+---
+- name: Update apt cache and upgrade base packages
+  ansible.builtin.apt:
+    update_cache: true
+    upgrade: full
+
+- name: Install zfsutils-linux
+  ansible.builtin.apt:
+    name: zfsutils-linux
+    state: present
+
+- name: Ensure keyrings directory exists
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+
+- name: Add Zabbly Incus GPG key
+  ansible.builtin.get_url:
+    url: https://pkgs.zabbly.com/key.asc
+    dest: /etc/apt/keyrings/zabbly.asc
+    mode: "0644"
+
+- name: Get OS release codename
+  ansible.builtin.command: bash -c ". /etc/os-release; echo $VERSION_CODENAME"
+  register: os_codename
+  changed_when: false
+
+- name: Add Zabbly Incus stable repo
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/zabbly-incus-stable.list
+    mode: "0644"
+    content: |
+      deb [signed-by=/etc/apt/keyrings/zabbly.asc] https://pkgs.zabbly.com/incus/stable {{ os_codename.stdout }} main
+
+- name: Install Incus
+  ansible.builtin.apt:
+    name:
+      - incus
+      - incus-client
+    state: present
+    update_cache: true
+
+- name: Check if Incus is already initialized
+  ansible.builtin.command: incus storage list --format json
+  register: incus_storage_check
+  changed_when: false
+  failed_when: false
+
+- name: Initialize Incus (minimal, ZFS + NAT bridge)
+  ansible.builtin.command: incus admin init --minimal
+  when: incus_storage_check.stdout == "[]" or incus_storage_check.rc != 0
+
+- name: Ensure host firewall default-denies inbound (ufw)
+  ansible.builtin.apt:
+    name: ufw
+    state: present
+
+- name: Configure ufw default policies
+  community.general.ufw:
+    direction: "{{ item.direction }}"
+    policy: "{{ item.policy }}"
+  loop:
+    - { direction: incoming, policy: deny }
+    - { direction: outgoing, policy: allow }
+
+- name: Enable ufw
+  community.general.ufw:
+    state: enabled

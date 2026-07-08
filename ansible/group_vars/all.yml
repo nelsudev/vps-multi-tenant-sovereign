@@ -1,0 +1,31 @@
+# Storage pool / bridge created by `incus admin init --minimal`
+incus_storage_pool: default
+incus_network: incusbr0
+
+tenants:
+  - name: tenant-a
+    limits:
+      cpu: 2
+      memory: 4GiB
+      processes: 500
+    disk:
+      size: 20GiB
+      read: 50MB
+      write: 30MB
+    network:
+      ingress: 100Mbit
+      egress: 100Mbit
+    data_root: /data/docker
+  - name: tenant-b
+    limits:
+      cpu: 2
+      memory: 4GiB
+      processes: 500
+    disk:
+      size: 20GiB
+      read: 50MB
+      write: 30MB
+    network:
+      ingress: 100Mbit
+      egress: 100Mbit
+    data_root: /data/docker

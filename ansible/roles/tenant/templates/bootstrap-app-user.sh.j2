@@ -1,0 +1,45 @@
+#!/bin/bash
+# Bootstrap for tenant "{{ tenant.name }}" — runs as the unprivileged "app" user
+# inside the container. Sets up rootless Docker on the ZFS-backed /data volume
+# and lays down a cloudflared config skeleton (tunnel still needs `cloudflared
+# tunnel login` + `tunnel create` run interactively — that step is not
+# automatable without your Cloudflare credentials).
+set -euo pipefail
+
+if ! command -v dockerd-rootless-setuptool.sh >/dev/null 2>&1; then
+  echo "dockerd-rootless-setuptool.sh not found — is docker.io installed?" >&2
+  exit 1
+fi
+
+dockerd-rootless-setuptool.sh install || true
+systemctl --user enable --now docker
+
+mkdir -p "{{ tenant.data_root }}"
+mkdir -p ~/.config/docker
+cat > ~/.config/docker/daemon.json <<EOF
+{ "data-root": "{{ tenant.data_root }}" }
+EOF
+
+systemctl --user stop docker || true
+systemctl --user start docker
+
+grep -qxF 'export DOCKER_HOST=unix:///run/user/$(id -u)/docker.sock' ~/.bashrc || \
+  echo 'export DOCKER_HOST=unix:///run/user/$(id -u)/docker.sock' >> ~/.bashrc
+
+mkdir -p ~/.cloudflared
+if [ ! -f ~/.cloudflared/config.yml ]; then
+  cat > ~/.cloudflared/config.yml <<'EOF'
+# Fill in after `cloudflared tunnel login` and `cloudflared tunnel create {{ tenant.name }}`
+# tunnel: {{ tenant.name }}
+# credentials-file: /home/app/.cloudflared/<tunnel-id>.json
+#
+# ingress:
+#   - hostname: ssh-{{ tenant.name }}.dominio.tld
+#     service: ssh://localhost:22
+#   - hostname: app-{{ tenant.name }}.dominio.tld
+#     service: http://localhost:8080
+#   - service: http_status:404
+EOF
+fi
+
+echo "bootstrap for {{ tenant.name }} complete"

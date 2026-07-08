@@ -1,0 +1,12 @@
+---
+- name: Provision Incus host (ZFS + Incus)
+  hosts: vps_host
+  become: true
+  roles:
+    - incus_host
+
+- name: Provision tenants (containers, docker rootless, cloudflared, limits)
+  hosts: vps_host
+  become: true
+  roles:
+    - tenant

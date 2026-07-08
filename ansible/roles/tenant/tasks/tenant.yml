@@ -1,0 +1,106 @@
+---
+- name: "{{ tenant.name }} :: check if container already exists"
+  ansible.builtin.command: "incus info {{ tenant.name }}"
+  register: tenant_exists
+  changed_when: false
+  failed_when: false
+
+- name: "{{ tenant.name }} :: launch unprivileged container with nesting"
+  ansible.builtin.command: >
+    incus launch images:ubuntu/24.04 {{ tenant.name }}
+    -c security.nesting=true
+    -c security.privileged=false
+    -c limits.cpu={{ tenant.limits.cpu }}
+    -c limits.memory={{ tenant.limits.memory }}
+    -c limits.memory.swap=false
+    -c limits.processes={{ tenant.limits.processes }}
+  when: tenant_exists.rc != 0
+
+- name: "{{ tenant.name }} :: wait for network in container"
+  ansible.builtin.command: "incus exec {{ tenant.name }} -- cloud-init status --wait"
+  changed_when: false
+  failed_when: false
+  when: tenant_exists.rc != 0
+
+- name: "{{ tenant.name }} :: create dedicated ZFS storage volume"
+  ansible.builtin.command: "incus storage volume create {{ incus_storage_pool }} {{ tenant.name }}-data"
+  register: vol_create
+  changed_when: "'already exists' not in vol_create.stderr"
+  failed_when: vol_create.rc != 0 and 'already exists' not in vol_create.stderr
+
+- name: "{{ tenant.name }} :: attach data volume to container"
+  ansible.builtin.command: >
+    incus config device add {{ tenant.name }} data disk
+    pool={{ incus_storage_pool }} source={{ tenant.name }}-data path=/data
+  register: dev_add
+  changed_when: "'already exists' not in dev_add.stderr"
+  failed_when: dev_add.rc != 0 and 'already exists' not in dev_add.stderr
+
+- name: "{{ tenant.name }} :: set disk quota and IO limits"
+  ansible.builtin.command: >
+    incus config device set {{ tenant.name }} data
+    limits.max={{ tenant.disk.size }}
+    limits.read={{ tenant.disk.read }}
+    limits.write={{ tenant.disk.write }}
+
+- name: "{{ tenant.name }} :: set network bandwidth limits"
+  ansible.builtin.command: >
+    incus config device set {{ tenant.name }} eth0
+    limits.ingress={{ tenant.network.ingress }}
+    limits.egress={{ tenant.network.egress }}
+
+- name: "{{ tenant.name }} :: enable daily snapshots, 7 day retention"
+  ansible.builtin.command: >
+    incus config set {{ tenant.name }}
+    snapshots.schedule=@daily
+    snapshots.expiry=7d
+
+- name: "{{ tenant.name }} :: install base packages inside container"
+  ansible.builtin.command: >
+    incus exec {{ tenant.name }} --
+    apt-get update
+  changed_when: false
+
+- name: "{{ tenant.name }} :: install docker, ssh, uidmap inside container"
+  ansible.builtin.command: >
+    incus exec {{ tenant.name }} --
+    apt-get install -y uidmap dbus-user-session docker.io docker-compose-v2 openssh-server curl
+  changed_when: false
+
+- name: "{{ tenant.name }} :: create unprivileged app user"
+  ansible.builtin.command: "incus exec {{ tenant.name }} -- useradd -m -s /bin/bash app"
+  register: user_create
+  changed_when: user_create.rc == 0
+  failed_when: user_create.rc != 0 and 'already exists' not in user_create.stderr
+
+- name: "{{ tenant.name }} :: enable lingering for app user (rootless services survive logout)"
+  ansible.builtin.command: "incus exec {{ tenant.name }} -- loginctl enable-linger app"
+  changed_when: false
+
+- name: "{{ tenant.name }} :: give app user ownership of /data"
+  ansible.builtin.command: "incus exec {{ tenant.name }} -- chown app:app /data"
+  changed_when: false
+
+- name: "{{ tenant.name }} :: push rootless docker + cloudflared bootstrap script"
+  ansible.builtin.template:
+    src: bootstrap-app-user.sh.j2
+    dest: "/tmp/{{ tenant.name }}-bootstrap.sh"
+    mode: "0755"
+
+- name: "{{ tenant.name }} :: copy bootstrap script into container"
+  ansible.builtin.command: >
+    incus file push /tmp/{{ tenant.name }}-bootstrap.sh
+    {{ tenant.name }}/tmp/bootstrap.sh --mode 0755
+  changed_when: false
+
+- name: "{{ tenant.name }} :: run bootstrap script as app user"
+  ansible.builtin.command: >
+    incus exec {{ tenant.name }} --
+    su - app -c "bash /tmp/bootstrap.sh"
+  register: bootstrap_run
+  changed_when: true
+
+- name: "{{ tenant.name }} :: remove local temp bootstrap script"
+  ansible.builtin.file:
+    path: "/tmp/{{ tenant.name }}-bootstrap.sh"
+    state: absent
