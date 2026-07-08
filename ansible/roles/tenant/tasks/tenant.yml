@@ -152,12 +152,12 @@
 - name: "Assert tenant uses intended network :: {{ tenant.name }}"
   ansible.builtin.assert:
     that:
-      - tenant_network_effective.stdout == tenant_network_name
+      - tenant_network_effective.stdout | trim == tenant_network_name
     fail_msg: >-
       Tenant {{ tenant.name }} eth0 is attached to
-      {{ tenant_network_effective.stdout | default('<unset>') }}, expected
-      {{ tenant_network_name }}. Refusing to continue with uncertain tenant
-      network isolation.
+      {{ tenant_network_effective.stdout | trim | default('<unset>', true) }},
+      expected {{ tenant_network_name }}. Refusing to continue with uncertain
+      tenant network isolation.
 
 - name: "Enable daily container snapshots :: {{ tenant.name }}"
   ansible.builtin.command: >
