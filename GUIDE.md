@@ -1,43 +1,42 @@
-# Uma VPS, N tenants que nem sabem que os vizinhos existem
+# One VPS, N tenants that don't even know their neighbors exist
 
-Guia de arquitetura + runbook manual para montar uma VPS multi-tenant com
-isolamento quase-VM: cada utilizador vive no seu próprio container Incus,
-corre o seu Docker rootless lá dentro, tem storage ZFS persistente e sai para
-a internet pelo seu próprio Cloudflare Tunnel. Um único IP público, zero
-portas abertas, zero visibilidade lateral entre tenants.
+Architecture guide + manual runbook for building a multi-tenant VPS with
+near-VM isolation: each tenant lives in its own Incus container, runs its own
+rootless Docker inside it, has persistent ZFS-backed storage, and reaches the
+internet through its own Cloudflare Tunnel. One public IP, zero open ports,
+zero lateral visibility between tenants.
 
-O role Ansible que automatiza a maior parte disto vive em
-`infra/multi-tenant-vps/ansible/` — este documento é o desenho e a
-justificação; usa-o para entender o *porquê* de cada peça, ou para provisionar
-à mão se preferires.
+The Ansible role that automates most of this lives in `ansible/` — this
+document is the design and the reasoning behind it; use it to understand
+*why* each piece exists, or to provision by hand if you prefer.
 
-## 00 · Porquê este desenho
+## 00 · Why this design
 
-Permissões Unix (users + `chmod 700`) resolvem *acesso* mas não resolvem
-*visibilidade*: um processo curioso ainda enumera `/proc`, vê o
-`docker.sock` global e faz `docker ps` dos vizinhos. A regra deste guia é dar
-a cada tenant uma **vista de kernel separada** via namespaces completos do
-Incus. Dentro do container, o vizinho não é bloqueado — ele literalmente
-**não existe**.
+Unix permissions (separate users + `chmod 700`) solve *access* but not
+*visibility*: a curious process can still enumerate `/proc`, see the global
+`docker.sock`, and run `docker ps` on its neighbors. The rule behind this
+guide is to give each tenant a **separate kernel view** via full Incus
+namespaces. Inside a container, the neighbor isn't blocked — it literally
+**doesn't exist**.
 
-| O que o Claude do tenant-a tenta      | Só users Linux       | Este desenho        |
-|----------------------------------------|-----------------------|----------------------|
-| `ps aux` / ler `/proc` dos vizinhos    | vê tudo               | não existe           |
-| `docker ps` de outros serviços         | vê o sock global      | daemon isolado       |
-| `ss -tulpn` / scan da rede interna     | mesma rede            | bridge própria       |
-| ler ficheiros de outro tenant          | bloqueado             | outro FS/dataset     |
-| escapar via kernel bug                 | mesmo namespace root  | unprivileged + idmap |
+| What tenant-a's process tries          | Plain Linux users     | This design          |
+|------------------------------------------|-----------------------|------------------------|
+| `ps aux` / read neighbors' `/proc`        | sees everything       | doesn't exist          |
+| `docker ps` on other services              | sees the shared sock  | isolated daemon        |
+| `ss -tulpn` / scan the internal network    | same network          | its own bridge         |
+| read another tenant's files                | blocked               | different FS/dataset   |
+| escape via a kernel bug                    | same root namespace   | unprivileged + idmap   |
 
-## 01 · Host — base, ZFS e Incus
+## 01 · Host — base, ZFS and Incus
 
-Ubuntu 24.04 LTS numa VPS com KVM (não OpenVZ — precisas de kernel próprio
-para nesting confiável).
+Ubuntu 24.04 LTS on a KVM-backed VPS (not OpenVZ — you need a real kernel for
+reliable nesting).
 
 ```bash
 apt update && apt -y full-upgrade
 apt -y install zfsutils-linux
 
-# Incus a partir do repo oficial Zabbly (mais recente que o do Ubuntu)
+# Incus from the official Zabbly repo (more recent than Ubuntu's own package)
 curl -fsSL https://pkgs.zabbly.com/key.asc | tee /etc/apt/keyrings/zabbly.asc
 sh -c 'echo "deb [signed-by=/etc/apt/keyrings/zabbly.asc] \
   https://pkgs.zabbly.com/incus/stable $(. /etc/os-release; echo $VERSION_CODENAME) main" \
@@ -45,19 +44,20 @@ sh -c 'echo "deb [signed-by=/etc/apt/keyrings/zabbly.asc] \
 apt update && apt -y install incus incus-client
 
 incus admin init --minimal
-# cria: pool ZFS "default", bridge "incusbr0" (NAT p/ saída), profile default
+# creates: ZFS pool "default", bridge "incusbr0" (NAT for outbound), default profile
 ```
 
-**Porquê ZFS**: cada container ganha o seu próprio dataset. Snapshots são
-instantâneos e `zfs send/receive` dá backup incremental por tenant — copias o
-tenant-a sem tocar nos outros. Os volumes Docker rootless de dentro do
-container vivem nesse dataset, logo entram nos snapshots automaticamente.
+**Why ZFS**: each container gets its own dataset. Snapshots are instant, and
+`zfs send/receive` gives you incremental backups per tenant — you copy
+tenant-a without touching the others. Rootless Docker volumes inside the
+container live on that same dataset, so they're automatically covered by
+snapshots.
 
-## 02 · Criar um tenant — container com nesting
+## 02 · Creating a tenant — a container with nesting
 
-Cada tenant é um container **unprivileged** (o root de dentro mapeia para um
-UID sem privilégios no host via idmap — a rede de segurança contra escapes)
-com **nesting ligado** para poder correr Docker lá dentro.
+Each tenant is an **unprivileged** container (root inside maps to an
+unprivileged UID on the host via idmap — the safety net against escapes)
+with **nesting enabled** so it can run Docker inside.
 
 ```bash
 incus launch images:ubuntu/24.04 tenant-a \
@@ -71,30 +71,30 @@ incus config device add tenant-a data disk \
   pool=default source=tenant-a-data path=/data
 ```
 
-Repete por tenant (`tenant-b`, `tenant-c`…) mudando só o nome e os limites.
-Cada um nasce na sua própria vista: PID 1 próprio, `/proc` próprio, rede
-própria na bridge com NAT.
+Repeat per tenant (`tenant-b`, `tenant-c`…), changing only the name and the
+limits. Each one is born with its own view: its own PID 1, its own `/proc`,
+its own network on the NAT bridge.
 
-> **O limite que mais esquecem**: sem `limits.memory` / `limits.cpu`, um
-> tenant pode consumir toda a RAM e derrubar os vizinhos por OOM —
-> isolamento de visibilidade não é isolamento de recursos. Define ambos
-> sempre.
+> **The limit people forget most**: without `limits.memory` / `limits.cpu`, a
+> tenant can consume all the RAM and OOM-crash its neighbors — visibility
+> isolation is not resource isolation. Always set both.
 
-## 03 · Dentro do tenant — user + Docker rootless
+## 03 · Inside the tenant — user + rootless Docker
 
 ```bash
 incus exec tenant-a -- bash
-# --- agora dentro do container ---
+# --- now inside the container ---
 apt update && apt -y install uidmap dbus-user-session \
   docker.io docker-compose-v2 openssh-server curl
 
 useradd -m -s /bin/bash app
-loginctl enable-linger app        # serviços do user sobrevivem ao logout
-install -d -o app -g app /data    # dá o volume ZFS ao user
+loginctl enable-linger app        # the user's services survive logout
+install -d -o app -g app /data    # hand the ZFS volume to the user
 ```
 
-Arranca o Docker **rootless** como o user `app`. Sem daemon global, sem
-`/var/run/docker.sock` — o socket vive em `$XDG_RUNTIME_DIR` do próprio user.
+Start Docker **rootless** as the `app` user. No global daemon, no
+`/var/run/docker.sock` — the socket lives under the user's own
+`$XDG_RUNTIME_DIR`.
 
 ```bash
 su - app
@@ -103,36 +103,36 @@ dockerd-rootless-setuptool.sh install
 systemctl --user enable --now docker
 echo 'export DOCKER_HOST=unix:///run/user/$(id -u)/docker.sock' >> ~/.bashrc
 
-# armazenar dados do docker no volume ZFS persistente
+# store docker data on the persistent ZFS volume
 mkdir -p /data/docker
 systemctl --user stop docker
 mkdir -p ~/.config/docker
 echo '{ "data-root": "/data/docker" }' > ~/.config/docker/daemon.json
 systemctl --user start docker
 
-docker run --rm hello-world # nested + rootless a funcionar
+docker run --rm hello-world # nested + rootless, working
 ```
 
-**Dupla parede**: Incus isola o tenant do host e dos vizinhos. Docker
-rootless isola os containers do próprio init do tenant. Um `docker ps` aqui
-dentro só mostra os containers do `app` — os outros tenants nem sequer têm
-daemon acessível.
+**Double wall**: Incus isolates the tenant from the host and from its
+neighbors. Rootless Docker isolates the containers from the tenant's own
+init. A `docker ps` in here only shows `app`'s own containers — the other
+tenants don't even have an accessible daemon.
 
-## 04 · Cloudflare Tunnel — um por tenant
+## 04 · Cloudflare Tunnel — one per tenant
 
-Sem reverse proxy no host, sem portas abertas. Cada container corre o seu
-próprio `cloudflared`, que abre uma ligação outbound para a Cloudflare. O
-tenant-a nunca toca na config de rede do tenant-b.
+No reverse proxy on the host, no open ports. Each container runs its own
+`cloudflared`, which opens an outbound connection to Cloudflare. tenant-a
+never touches tenant-b's network config.
 
 ```bash
-# instala o cloudflared dentro do container
+# install cloudflared inside the container
 curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg \
   | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
-# (repo apt cloudflared) → apt install cloudflared
+# (cloudflared apt repo) → apt install cloudflared
 
 cloudflared tunnel login
 cloudflared tunnel create tenant-a
-cloudflared tunnel route dns tenant-a app-a.dominio.tld
+cloudflared tunnel route dns tenant-a app-a.yourdomain.tld
 ```
 
 `~/.cloudflared/config.yml`:
@@ -142,152 +142,152 @@ tunnel: tenant-a
 credentials-file: /home/app/.cloudflared/<tunnel-id>.json
 
 ingress:
-  - hostname: app-a.dominio.tld
+  - hostname: app-a.yourdomain.tld
     service: http://localhost:8080
   - service: http_status:404
 ```
 
 ```bash
-cloudflared service install   # ou um unit em ~/.config/systemd/user/
+cloudflared service install   # or a unit under ~/.config/systemd/user/
 systemctl --user enable --now cloudflared
 ```
 
-**Resultado de rede**: o host não expõe uma única porta de entrada. Firewall
-do host pode ficar *default-deny inbound* completo — inclusive para
-HTTP/HTTPS.
+**Net result**: the host doesn't expose a single inbound port. The host
+firewall can be fully *default-deny inbound* — including for HTTP/HTTPS.
 
-## 05 · SSH — acesso sem abrir o host
+## 05 · SSH — access without opening the host
 
-- **Opção A — SSH pelo próprio Cloudflare Tunnel** (recomendada): adiciona
-  uma entrada `ingress` do tipo `ssh://localhost:22` no `cloudflared` do
-  tenant e liga com `cloudflared access ssh`. Protegível com Cloudflare
-  Access (Zero Trust), sem abrir portas no host.
-- **Opção B — jump pelo host**: `sshd` do host escuta só na LAN/WireGuard, o
-  admin faz `incus exec tenant-a -- su - app`. Mais simples, mas o admin
-  "vê" que é máquina partilhada.
+- **Option A — SSH through the tenant's own Cloudflare Tunnel** (recommended):
+  add an `ssh://localhost:22` `ingress` entry to the tenant's `cloudflared`
+  config and connect with `cloudflared access ssh`. Can be protected with
+  Cloudflare Access (Zero Trust), with no ports open on the host.
+- **Option B — jump through the host**: the host's `sshd` listens only on
+  the LAN/WireGuard, and the admin runs `incus exec tenant-a -- su - app`.
+  Simpler, but the admin "sees" that it's a shared machine.
 
 ```yaml
 ingress:
-  - hostname: ssh-a.dominio.tld
+  - hostname: ssh-a.yourdomain.tld
     service: ssh://localhost:22
-  - hostname: app-a.dominio.tld
+  - hostname: app-a.yourdomain.tld
     service: http://localhost:8080
   - service: http_status:404
 ```
 
 ```bash
 ssh -o ProxyCommand="cloudflared access ssh --hostname %h" \
-  app@ssh-a.dominio.tld
+  app@ssh-a.yourdomain.tld
 ```
 
-## 06 · Storage persistente & backups
+## 06 · Persistent storage & backups
 
 ```bash
-# snapshot instantâneo do container inteiro (rootfs)
+# instant snapshot of the whole container (rootfs)
 incus snapshot create tenant-a pre-update
 
-# snapshot do volume de dados
+# snapshot of the data volume
 incus storage volume snapshot default tenant-a-data daily-$(date +%F)
 
-# backup incremental off-site, só deste tenant
-zfs send -i default/... default/tenant-a-data@ontem \
+# incremental off-site backup, for this tenant only
+zfs send -i default/... default/tenant-a-data@yesterday \
   | ssh backup@offsite zfs recv tank/backups/tenant-a
 
-# retenção automática, sem cron manual
+# automatic retention, no manual cron
 incus config set tenant-a \
   snapshots.schedule="@daily" \
   snapshots.expiry="7d"
 ```
 
-## 07 · Endurecer — o teste do vizinho
+## 07 · Hardening — the neighbor test
 
-Corridos como `app` dentro de um tenant, estes comandos devem **falhar em
-ver seja o que for do host ou dos vizinhos**:
+Run as `app` inside a tenant, these commands should **fail to see anything
+belonging to the host or to any neighbor**:
 
 ```bash
-ps aux              # → só processos deste container
-docker ps           # → só os containers do app
-ss -tulpn           # → só sockets deste tenant
-ip addr             # → só a interface da bridge própria
-cat /proc/1/cgroup   # → não revela paths do host
-ls /               # → rootfs próprio; nenhum /data de outro tenant
+ps aux              # → only this container's processes
+docker ps           # → only app's own containers
+ss -tulpn           # → only this tenant's sockets
+ip addr             # → only its own bridge interface
+cat /proc/1/cgroup  # → doesn't reveal host paths
+ls /                # → its own rootfs; no other tenant's /data
 ```
 
-Checklist final de endurecimento do host:
+Final host hardening checklist:
 
-- **Firewall default-deny inbound** — com Cloudflare Tunnel não precisas de
-  nenhuma porta aberta (nem 80/443). SSH do host só via WireGuard, se usares
-  a Opção B.
-- **Confirma unprivileged** — `incus config get tenant-a
-  security.privileged` tem de dar `false`/vazio.
-- **Sem sudo para o `app`** — depois do provisioning, tira o user de
-  qualquer grupo `sudo`.
-- **Updates do host = updates de todos os kernels** — automatiza
-  `unattended-upgrades` e reboots agendados; snapshots dão-te rollback.
-- **Cloudflare Access à frente dos túneis** — políticas Zero Trust por
+- **Default-deny inbound firewall** — with a Cloudflare Tunnel you don't
+  need any open port (not even 80/443). Host SSH only over WireGuard, if
+  using Option B.
+- **Confirm unprivileged** — `incus config get tenant-a
+  security.privileged` must return `false`/empty.
+- **No sudo for `app`** — after provisioning, remove the user from any
+  `sudo` group.
+- **Host updates = updates to every kernel** — automate
+  `unattended-upgrades` and scheduled reboots; snapshots give you rollback.
+- **Cloudflare Access in front of the tunnels** — Zero Trust policies per
   hostname.
 
-> **O limite honesto deste desenho**: tudo partilha um kernel. Unprivileged +
-> idmap torna um escape improvável e caro, mas não impossível como uma
-> microVM (Firecracker) tornaria. Para 99% dos casos — inclusive "um agente
-> não pode saber do vizinho" — isto chega e sobra. Se um dia precisares de
-> garantia de hardware, trocas o Incus por microVMs mantendo o mesmo padrão
-> de tunnel/storage por tenant.
+> **The honest limit of this design**: everything shares one kernel.
+> Unprivileged + idmap makes an escape unlikely and expensive, but not
+> impossible the way a microVM (Firecracker) would make it. For 99% of
+> cases — including "an agent can't know about the neighbor" — this is
+> enough and then some. If you ever need hardware-level guarantees, swap
+> Incus for microVMs while keeping the same tunnel/storage-per-tenant
+> pattern.
 
-## 08 · Limites de recursos por tenant
+## 08 · Per-tenant resource limits
 
-Isolamento de visibilidade não é isolamento de recursos — sem limites, um
-tenant esfomeado derruba os vizinhos por contenção de CPU/RAM/IO. Os limites
-vivem em **cgroups v2**, aplicados pelo Incus ao container inteiro.
+Visibility isolation is not resource isolation — without limits, a starved
+tenant crashes its neighbors through CPU/RAM/IO contention. Limits live in
+**cgroups v2**, applied by Incus to the whole container.
 
 ```bash
-incus config set tenant-a limits.cpu=2              # nº de vCPUs visíveis
-incus config set tenant-a limits.cpu.allowance=50%  # alternativa: % de tempo de CPU
-incus config set tenant-a limits.cpu.priority=5     # peso sob contenção (1-10)
-incus config set tenant-a limits.memory=4GiB        # hard cap de RAM
-incus config set tenant-a limits.memory.swap=false  # sem swap p/ este tenant
+incus config set tenant-a limits.cpu=2              # number of visible vCPUs
+incus config set tenant-a limits.cpu.allowance=50%  # alternative: % of CPU time
+incus config set tenant-a limits.cpu.priority=5     # weight under contention (1-10)
+incus config set tenant-a limits.memory=4GiB        # hard RAM cap
+incus config set tenant-a limits.memory.swap=false  # no swap for this tenant
 incus config set tenant-a limits.processes=500      # anti fork-bomb
 
-# throttle de I/O no device de dados
+# throttle I/O on the data device
 incus config device set tenant-a data limits.read=50MB limits.write=30MB
-incus config device set tenant-a data limits.max=20GiB    # quota de espaço (ZFS)
+incus config device set tenant-a data limits.max=20GiB    # disk quota (ZFS)
 
-# largura de banda de rede
+# network bandwidth
 incus config device set tenant-a eth0 limits.ingress=100Mbit limits.egress=100Mbit
 ```
 
-| Limite                       | O que faz                                   | Quando usar                                  |
-|-------------------------------|----------------------------------------------|-----------------------------------------------|
-| `limits.cpu`                  | Fixa nº de cores que o tenant vê             | Contas previsíveis, "quase VPS"               |
-| `limits.cpu.allowance`        | Vê todos os cores, consome só X%             | Bursting ocasional sem fixar nº               |
-| `limits.memory`               | Hard cap de RAM; OOM local ao estourar        | Sempre — nunca deixar por definir             |
-| `limits.processes`            | Teto de PIDs no container                    | Sempre — barato, evita fork-bomb              |
-| device `limits.read/write`    | Throttle de IOPS/débito de disco             | Vizinho a saturar o storage partilhado        |
-| device `limits.ingress/egress`| Throttle de banda de rede                    | Tenant com tráfego pesado a afetar os outros  |
+| Limit                          | What it does                                | When to use it                                |
+|----------------------------------|-----------------------------------------------|--------------------------------------------------|
+| `limits.cpu`                     | Fixes the number of cores the tenant sees      | Predictable plans, "almost a VPS"                |
+| `limits.cpu.allowance`           | Sees all cores, only consumes X%              | Occasional bursting without a fixed core count   |
+| `limits.memory`                  | Hard RAM cap; local OOM when exceeded          | Always — never leave this unset                  |
+| `limits.processes`               | PID ceiling in the container                  | Always — cheap, prevents fork-bombs              |
+| device `limits.read/write`       | Throttles disk IOPS/throughput                | A neighbor saturating shared storage             |
+| device `limits.ingress/egress`   | Throttles network bandwidth                   | A tenant with heavy traffic affecting others      |
 
-**Regra prática**: `limits.memory` é a que nunca podes esquecer — sem ela, um
-tenant que rebente por memória arrisca levar o host a OOM global. Prefere
-`limits.cpu=N` a `allowance` quando quiseres previsibilidade tipo "este
-cliente tem 2 cores", e usa `processes` como rede de segurança barata contra
-fork-bombs.
+**Rule of thumb**: `limits.memory` is the one you can never forget — without
+it, a tenant that blows up on memory risks taking the whole host into a
+global OOM. Prefer `limits.cpu=N` over `allowance` when you want
+predictability like "this customer gets 2 cores," and use `processes` as a
+cheap safety net against fork-bombs.
 
-Muda-se a quente, sem reiniciar o container na maioria dos casos. Dentro do
-próprio tenant, o Docker rootless ainda pode sub-limitar containers
-individuais (`docker run --cpus --memory`), mas isso já é o tenant a
-gerir-se a si próprio, não a fronteira entre tenants.
+These can be changed live, without restarting the container in most cases.
+Inside the tenant itself, rootless Docker can still sub-limit individual
+containers (`docker run --cpus --memory`), but that's the tenant managing
+itself, not the boundary between tenants.
 
-## 09 · Ciclo de vida — o dia-a-dia
+## 09 · Lifecycle — day to day
 
 ```bash
-incus list                              # estado de todos os tenants
-incus exec tenant-a -- su - app          # entrar num tenant
-incus stop|start|restart tenant-a        # ciclo de vida
-incus copy tenant-a tenant-d             # clonar → novo tenant base
+incus list                              # status of every tenant
+incus exec tenant-a -- su - app          # enter a tenant
+incus stop|start|restart tenant-a        # lifecycle
+incus copy tenant-a tenant-d             # clone → new base tenant
 incus config device set tenant-a \
-  data limits.max=20GiB                    # quota de disco
-incus delete tenant-a --force            # remover (snapshot antes!)
+  data limits.max=20GiB                    # disk quota
+incus delete tenant-a --force            # remove (snapshot first!)
 ```
 
-Adicionar o tenant N+1 é literalmente repetir a secção 02 → 05 com outro
-nome — ou correr o role Ansible em `infra/multi-tenant-vps/ansible/` depois
-de adicionar a entrada em `group_vars/all.yml`.
+Adding tenant N+1 is literally repeating sections 02 → 05 with a different
+name — or running the Ansible role in `ansible/` after adding an entry to
+`group_vars/all.yml`.
