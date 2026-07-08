@@ -55,6 +55,14 @@ existence of another tenant's services — not through `/proc`, not through
 Full writeup with rationale, the isolation test checklist, and command-by-command
 walkthrough: [`GUIDE.md`](./GUIDE.md).
 
+## 🤖 Let an agent do it
+
+Have Claude Code, Codex, or OpenCode run the whole setup for you — clone
+this repo, hand it the prompt in [`AGENT_SETUP_PROMPT.md`](./AGENT_SETUP_PROMPT.md)
+with your host/domain/tenant list filled in, and it drives the Ansible run,
+verifies isolation with the neighbor test after each tenant, and hands
+control back to you only for the Cloudflare login step.
+
 ## 🚀 Quick start
 
 ```bash
