@@ -130,15 +130,34 @@
     incus config device override {{ tenant.name }} eth0
     network={{ tenant_network_name }}
   register: tenant_network_override
-  changed_when: false
-  failed_when: false
+  changed_when: tenant_network_override.rc == 0
+  failed_when: >-
+    tenant_network_override.rc != 0 and
+    'already exists' not in (tenant_network_override.stderr | lower)
 
-- name: "Set network bandwidth limits :: {{ tenant.name }}"
+- name: "Set network and bandwidth limits :: {{ tenant.name }}"
   ansible.builtin.command: >
     incus config device set {{ tenant.name }} eth0
+    network={{ tenant_network_name }}
     limits.ingress={{ tenant.network.ingress }}
     limits.egress={{ tenant.network.egress }}
   changed_when: false
+
+- name: "Read effective tenant network device :: {{ tenant.name }}"
+  ansible.builtin.command: >
+    incus config device get {{ tenant.name }} eth0 network
+  register: tenant_network_effective
+  changed_when: false
+
+- name: "Assert tenant uses intended network :: {{ tenant.name }}"
+  ansible.builtin.assert:
+    that:
+      - tenant_network_effective.stdout == tenant_network_name
+    fail_msg: >-
+      Tenant {{ tenant.name }} eth0 is attached to
+      {{ tenant_network_effective.stdout | default('<unset>') }}, expected
+      {{ tenant_network_name }}. Refusing to continue with uncertain tenant
+      network isolation.
 
 - name: "Enable daily container snapshots :: {{ tenant.name }}"
   ansible.builtin.command: >

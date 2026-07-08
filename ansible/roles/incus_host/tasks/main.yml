@@ -104,6 +104,120 @@
   when:
     - incus_host_storage_check.rc != 0 or incus_host_target_pool_line | length == 0
 
+- name: Check default Incus network
+  ansible.builtin.command: "incus network info {{ incus_network }}"
+  register: incus_host_network_check
+  changed_when: false
+  failed_when: false
+
+- name: Create default Incus NAT network
+  ansible.builtin.command: >
+    incus network create {{ incus_network }}
+    ipv4.address={{ incus_network_ipv4_address }}
+    ipv4.nat=true
+    ipv6.address={{ incus_network_ipv6_address }}
+  changed_when: true
+  when: incus_host_network_check.rc != 0
+
+- name: Reconcile default Incus network config
+  ansible.builtin.command: >
+    incus network set {{ incus_network }}
+    ipv4.nat=true
+    ipv6.address={{ incus_network_ipv6_address }}
+  changed_when: false
+
+- name: Reconcile default Incus network IPv4 address
+  ansible.builtin.command: >
+    incus network set {{ incus_network }}
+    ipv4.address={{ incus_network_ipv4_address }}
+  changed_when: false
+  when: incus_network_ipv4_address != "auto"
+
+- name: Read default Incus network IPv4 NAT
+  ansible.builtin.command: "incus network get {{ incus_network }} ipv4.nat"
+  register: incus_host_network_ipv4_nat
+  changed_when: false
+
+- name: Read default Incus network IPv4 address
+  ansible.builtin.command: >
+    incus network get {{ incus_network }} ipv4.address
+  register: incus_host_network_ipv4_address
+  changed_when: false
+
+- name: Read default Incus network IPv6 address
+  ansible.builtin.command: >
+    incus network get {{ incus_network }} ipv6.address
+  register: incus_host_network_ipv6_address
+  changed_when: false
+
+- name: Assert default Incus network matches preseed contract
+  ansible.builtin.assert:
+    that:
+      - incus_host_network_ipv4_nat.stdout == "true"
+      - incus_host_network_ipv6_address.stdout == incus_network_ipv6_address
+      - >-
+        incus_network_ipv4_address == "auto" or
+        incus_host_network_ipv4_address.stdout == incus_network_ipv4_address
+    fail_msg: >-
+      Incus network {{ incus_network }} does not match this role's preseed
+      contract. Expected ipv4.nat=true, ipv6.address={{ incus_network_ipv6_address }},
+      and ipv4.address={{ incus_network_ipv4_address }} when not auto.
+
+- name: Ensure default profile has root disk
+  ansible.builtin.command: >
+    incus profile device add default root disk
+    path=/ pool={{ incus_storage_pool }}
+  register: incus_host_profile_root_add
+  changed_when: "'already exists' not in incus_host_profile_root_add.stderr"
+  failed_when: >-
+    incus_host_profile_root_add.rc != 0 and
+    'already exists' not in (incus_host_profile_root_add.stderr | lower)
+
+- name: Reconcile default profile root disk
+  ansible.builtin.command: >
+    incus profile device set default root
+    path=/ pool={{ incus_storage_pool }}
+  changed_when: false
+
+- name: Ensure default profile has network device
+  ansible.builtin.command: >
+    incus profile device add default eth0 nic
+    name=eth0 network={{ incus_network }}
+  register: incus_host_profile_eth0_add
+  changed_when: "'already exists' not in incus_host_profile_eth0_add.stderr"
+  failed_when: >-
+    incus_host_profile_eth0_add.rc != 0 and
+    'already exists' not in (incus_host_profile_eth0_add.stderr | lower)
+
+- name: Reconcile default profile network device
+  ansible.builtin.command: >
+    incus profile device set default eth0
+    name=eth0 network={{ incus_network }}
+  changed_when: false
+
+- name: Read default profile root pool
+  ansible.builtin.command: incus profile device get default root pool
+  register: incus_host_profile_root_pool
+  changed_when: false
+
+- name: Read default profile eth0 network
+  ansible.builtin.command: incus profile device get default eth0 network
+  register: incus_host_profile_eth0_network
+  changed_when: false
+
+- name: Assert default profile matches preseed contract
+  ansible.builtin.assert:
+    that:
+      - incus_host_profile_root_pool.stdout == incus_storage_pool
+      - incus_host_profile_eth0_network.stdout == incus_network
+    fail_msg: >-
+      The default Incus profile does not match this role's preseed contract.
+      Expected root pool {{ incus_storage_pool }} and eth0 network
+      {{ incus_network }}, got root pool
+      {{ incus_host_profile_root_pool.stdout | default('<unset>') }} and
+      eth0 network
+      {{ incus_host_profile_eth0_network.stdout | default('<unset>') }}.
+
 - name: Ensure host firewall default-denies inbound (ufw)
   ansible.builtin.apt:
     name: ufw
