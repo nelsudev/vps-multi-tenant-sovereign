@@ -3,6 +3,7 @@
   ansible.builtin.apt:
     update_cache: true
     upgrade: full
+    cache_valid_time: 3600
 
 - name: Install zfsutils-linux
   ansible.builtin.apt:
@@ -21,17 +22,12 @@
     dest: /etc/apt/keyrings/zabbly.asc
     mode: "0644"
 
-- name: Get OS release codename
-  ansible.builtin.command: bash -c ". /etc/os-release; echo $VERSION_CODENAME"
-  register: os_codename
-  changed_when: false
-
 - name: Add Zabbly Incus stable repo
   ansible.builtin.copy:
     dest: /etc/apt/sources.list.d/zabbly-incus-stable.list
     mode: "0644"
     content: |
-      deb [signed-by=/etc/apt/keyrings/zabbly.asc] https://pkgs.zabbly.com/incus/stable {{ os_codename.stdout }} main
+      deb [signed-by=/etc/apt/keyrings/zabbly.asc] https://pkgs.zabbly.com/incus/stable {{ ansible_distribution_release }} main
 
 - name: Install Incus
   ansible.builtin.apt:
@@ -42,27 +38,93 @@
     update_cache: true
 
 - name: Check if Incus is already initialized
-  ansible.builtin.command: incus storage list --format json
-  register: incus_storage_check
+  ansible.builtin.command: incus storage list --format csv -c n,d
+  register: incus_host_storage_check
   changed_when: false
   failed_when: false
 
-- name: Initialize Incus (minimal, ZFS + NAT bridge)
-  ansible.builtin.command: incus admin init --minimal
-  when: incus_storage_check.stdout == "[]" or incus_storage_check.rc != 0
+- name: Find target Incus storage pool
+  ansible.builtin.set_fact:
+    incus_host_target_pool_line: >-
+      {{
+        incus_host_storage_check.stdout_lines
+        | default([])
+        | select('match', '^' ~ incus_storage_pool ~ ',')
+        | list
+        | first
+        | default('')
+      }}
+
+- name: Refuse non-ZFS target storage pool
+  ansible.builtin.fail:
+    msg: >-
+      Incus pool {{ incus_storage_pool }} already exists with driver
+      {{ incus_host_target_pool_line.split(',')[1] }}. This role requires
+      {{ incus_storage_driver }} so snapshots, quotas, and zfs send/receive
+      behave as documented.
+  when:
+    - incus_host_target_pool_line | length > 0
+    - incus_host_target_pool_line.split(',')[1] != incus_storage_driver
+
+- name: Initialize Incus with explicit ZFS pool and NAT bridge
+  ansible.builtin.command: incus admin init --preseed
+  args:
+    stdin: |
+      config: {}
+      networks:
+        - name: {{ incus_network }}
+          type: bridge
+          config:
+            ipv4.address: {{ incus_network_ipv4_address | quote }}
+            ipv4.nat: "true"
+            ipv6.address: {{ incus_network_ipv6_address | quote }}
+      storage_pools:
+        - name: {{ incus_storage_pool }}
+          driver: {{ incus_storage_driver }}
+          config:
+      {% if incus_storage_source is defined and incus_storage_source | length > 0 %}
+            source: {{ incus_storage_source | quote }}
+      {% else %}
+            size: {{ incus_zfs_pool_size | quote }}
+      {% endif %}
+      profiles:
+        - name: default
+          devices:
+            eth0:
+              name: eth0
+              network: {{ incus_network }}
+              type: nic
+            root:
+              path: /
+              pool: {{ incus_storage_pool }}
+              type: disk
+      projects: []
+      cluster: null
+  changed_when: true
+  when:
+    - incus_host_storage_check.rc != 0 or incus_host_target_pool_line | length == 0
 
 - name: Ensure host firewall default-denies inbound (ufw)
   ansible.builtin.apt:
     name: ufw
     state: present
 
-- name: Configure ufw default policies
+- name: Allow SSH before enabling ufw
   community.general.ufw:
-    direction: "{{ item.direction }}"
-    policy: "{{ item.policy }}"
-  loop:
-    - { direction: incoming, policy: deny }
-    - { direction: outgoing, policy: allow }
+    rule: allow
+    port: "{{ incus_host_ufw_ssh_port }}"
+    proto: tcp
+  when: incus_host_ufw_allow_ssh | bool
+
+- name: Configure ufw default incoming policy
+  community.general.ufw:
+    direction: incoming
+    policy: deny
+
+- name: Configure ufw default outgoing policy
+  community.general.ufw:
+    direction: outgoing
+    policy: allow
 
 - name: Enable ufw
   community.general.ufw:

@@ -68,6 +68,7 @@ control back to you only for the Cloudflare login step.
 ```bash
 cd ansible
 cp inventory.example.ini inventory.ini   # point it at your VPS
+ansible-galaxy collection install -r requirements.yml
 # edit group_vars/all.yml — define your tenants and their limits
 ansible-playbook -i inventory.ini site.yml
 ```
@@ -95,10 +96,10 @@ run.
   `new-tenant` (provision + neighbor test) and `migrate-tenant` (move a
   tenant to another host with near-zero downtime). Each skill documents its
   origin (which doc sections it distills) so it can be kept in sync.
-- ⚙️ `ansible/` — a role that automates most of this: host prep (ZFS, Incus,
-  default-deny firewall) and per-tenant provisioning (container, ZFS volume,
-  resource limits, rootless Docker, Cloudflare Tunnel config skeleton). See
-  `ansible/group_vars/all.yml` to define tenants and their limits.
+- ⚙️ `ansible/` — a role that automates most of this: host prep (explicit
+  ZFS-backed Incus init, NAT bridge, UFW), per-tenant dedicated bridges, ZFS
+  volumes, resource limits, rootless Docker, and a Cloudflare Tunnel config
+  skeleton. See `ansible/group_vars/all.yml` to define tenants and limits.
 
 ## 🔐 Note on the Cloudflare Tunnel step
 

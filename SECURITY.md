@@ -147,21 +147,19 @@ sysctl --system
 
 - ufw default-deny inbound (done by the Ansible role). Verify nothing crept
   in: `ss -tlnp` on the host should show *nothing* on the public interface.
-- **Inter-tenant traffic**: on the shared bridge, tenants can technically
-  reach each other's IPs. Block lateral traffic explicitly:
-
-  ```bash
-  # Incus ACL: allow egress to the internet, deny tenant→tenant
-  incus network set incusbr0 security.acls="no-lateral"
-  ```
-
-  or give each tenant its **own bridge** (strongest, what the guide's
-  "bridge própria" implies for paranoid setups):
+- **Inter-tenant traffic**: on a shared bridge, tenants can technically
+  reach each other's IPs if they learn them. The default Ansible variables
+  use one NAT bridge per tenant, which is the clearer boundary:
 
   ```bash
   incus network create net-tenant-a ipv4.address=10.1.1.1/24 ipv4.nat=true
   incus config device override tenant-a eth0 network=net-tenant-a
   ```
+
+  Incus ACLs can still be useful, but do not treat a single shared bridge as
+  the primary isolation layer for a hostile multi-tenant setup. Keep the
+  network topology simple enough that the neighbor test is easy to reason
+  about and repeat.
 
 ## 3 · Detection: knowing something's wrong
 

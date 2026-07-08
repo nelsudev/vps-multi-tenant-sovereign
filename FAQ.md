@@ -58,9 +58,10 @@ Linger` — must say `Linger=yes`.
   *after* Docker starts, rootless Docker's slirp4netns may conflict with a
   proxy env var. Check `~/.config/systemd/user/docker.service.d/` overrides.
 
-### `incus admin init --minimal` created a tiny loop-backed ZFS pool
+### The ZFS pool is loop-backed and too small
 
-The minimal preset sizes the loop file conservatively. Grow it:
+The Ansible role initializes Incus with an explicit ZFS preseed. If you use
+the default loop-backed pool and outgrow it, increase its size:
 
 ```bash
 incus storage set default size=100GiB   # grows the loop file
@@ -189,7 +190,7 @@ after reserving for the host and ZFS ARC. CPU oversubscribes gracefully
 
 ### How do I move a tenant to a new/bigger VPS?
 
-`incus move` carries the whole container — rootfs, config (limits, nesting,
+`incus copy` carries the whole container — rootfs, config (limits, nesting,
 devices), snapshots, and everything inside it (the `app` user, rootless
 Docker, `cloudflared` with its tunnel credentials). Two things it does
 **not** cover:
@@ -204,7 +205,7 @@ Docker, `cloudflared` with its tunnel credentials). Two things it does
 # old host:
 incus remote add newbox <ip-or-name>
 incus stop tenant-a
-incus move tenant-a newbox:tenant-a
+incus copy tenant-a newbox:tenant-a
 incus storage volume copy default/tenant-a-data newbox:default/tenant-a-data
 # new host: re-attach the volume, then start
 incus config device add tenant-a data disk \
@@ -223,10 +224,16 @@ outbound and the credentials traveled inside the container. The tenant
 never knows it moved. And because it's per-tenant, you can upgrade servers
 one tenant at a time — no big-bang migration.
 
+Keep the stopped tenant on the old host until verification passes. That is
+your rollback path; delete it only after the new host is serving traffic.
+
 ### Ansible run fails halfway — is it safe to re-run?
 
-Yes, the role is written to be idempotent: existing containers, volumes,
-and users are detected and skipped. Re-run `site.yml` freely; it converges.
+Yes. Existing containers, volumes, tenant networks, and users are detected,
+and tenant limits are re-applied on every run. Re-run `site.yml` freely, but
+keep reading task output: infrastructure commands can still fail if the host
+was manually changed into a contradictory state, for example if the `default`
+Incus pool already exists with a non-ZFS driver.
 
 ### I deleted a tenant by accident
 

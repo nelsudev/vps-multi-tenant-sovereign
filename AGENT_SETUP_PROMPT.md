@@ -25,28 +25,28 @@ Do this:
 
 1. Set up ansible/inventory.ini from inventory.example.ini pointing at the
    target host. Do not commit it.
-2. Fill ansible/group_vars/all.yml with the tenant list above and your
+2. Install the Ansible collections from ansible/requirements.yml.
+3. Fill ansible/group_vars/all.yml with the tenant list above and your
    chosen limits — explain your reasoning for the limits you pick.
-3. Run the incus_host role first, verify: ZFS pool exists, Incus is
+4. Run the incus_host role first, verify: ZFS pool exists, Incus is
    initialized, ufw is default-deny inbound with nothing listening on the
    public interface (ss -tlnp should show nothing exposed).
-4. Run the tenant role for each tenant. After each one, run the neighbor
+5. Run the tenant role for each tenant. After each one, run the neighbor
    test from GUIDE.md §07 (ps aux, docker ps, ss -tulpn, ip addr, cat
    /proc/1/cgroup, ls /) and confirm nothing leaks between tenants or to
    the host — show me the output.
-5. For each tenant, stop and tell me: Cloudflare Tunnel login/creation
+6. For each tenant, stop and tell me: Cloudflare Tunnel login/creation
    needs interactive browser auth and cannot be automated. Give me the
    exact commands to run per tenant (or point me at the remotely-managed
    tunnel token flow from FAQ.md, whichever is simpler for me to execute),
    then wait for me to paste back the tunnel is live before continuing.
-6. Apply the hardening from SECURITY.md §2: hidepid=2, the sysctl
-   hardening block, and lateral traffic blocking between tenants
-   (dedicated bridge per tenant, or the ACL approach — pick one and tell
-   me which and why).
-7. Set up unattended-upgrades on the host per SECURITY.md §1, and tell me
+7. Apply the hardening from SECURITY.md §2: hidepid=2, the sysctl
+   hardening block, and dedicated bridge per tenant for lateral traffic
+   blocking.
+8. Set up unattended-upgrades on the host per SECURITY.md §1, and tell me
    whether this VPS is eligible for Ubuntu Pro's free tier so I can enable
    Livepatch.
-8. Give me a final report: what's running, what each tenant's resource
+9. Give me a final report: what's running, what each tenant's resource
    budget is, what still needs my manual action (tunnels, Livepatch
    token), and the exact verification commands I can re-run anytime to
    confirm isolation holds.

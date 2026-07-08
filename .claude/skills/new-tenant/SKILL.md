@@ -12,9 +12,12 @@ description: Use when adding a new isolated tenant to the multi-tenant VPS — c
 ## Preferred path: Ansible (idempotent)
 
 1. Add an entry to `ansible/group_vars/all.yml` under `tenants:` — copy an
-   existing block, change `name` and adjust limits. Never omit
-   `limits.memory` or `limits.processes`.
-2. Run: `ansible-playbook -i inventory.ini site.yml` (existing tenants are
+   existing block, change `name`, give it a unique `network.bridge` and
+   `network.bridge_ipv4`, and adjust limits. Never omit `limits.memory` or
+   `limits.processes`.
+2. Run: `ansible-galaxy collection install -r ansible/requirements.yml`
+   if the collections are not installed yet.
+3. Run: `ansible-playbook -i inventory.ini site.yml` (existing tenants are
    detected and skipped).
 
 ## Manual path (or when debugging the role)

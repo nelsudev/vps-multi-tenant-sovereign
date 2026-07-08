@@ -1,6 +1,21 @@
-# Storage pool / bridge created by `incus admin init --minimal`
+---
+# Incus storage pool and default NAT bridge created by the incus_host role.
 incus_storage_pool: default
+incus_storage_driver: zfs
+incus_zfs_pool_size: 100GiB
+
 incus_network: incusbr0
+incus_network_ipv4_address: auto
+incus_network_ipv6_address: none
+
+# Keep this true for a first run over public SSH, otherwise UFW can lock the
+# active Ansible session out. Set it false once admin access is private
+# (WireGuard, Cloudflare Access, provider console, etc.).
+incus_host_ufw_allow_ssh: true
+incus_host_ufw_ssh_port: 22
+
+# Create one NAT bridge per tenant instead of putting all tenants on incusbr0.
+incus_tenant_network_mode: dedicated_bridge
 
 tenants:
   - name: tenant-a
@@ -13,6 +28,8 @@ tenants:
       read: 50MB
       write: 30MB
     network:
+      bridge: net-tenant-a
+      bridge_ipv4: 10.201.1.1/24
       ingress: 100Mbit
       egress: 100Mbit
     data_root: /data/docker
@@ -26,6 +43,8 @@ tenants:
       read: 50MB
       write: 30MB
     network:
+      bridge: net-tenant-b
+      bridge_ipv4: 10.201.2.1/24
       ingress: 100Mbit
       egress: 100Mbit
     data_root: /data/docker
