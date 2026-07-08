@@ -75,6 +75,10 @@ run.
   nested rootless Docker, Cloudflare Tunnel per tenant, SSH access options,
   backups, resource limits, and a "neighbor test" to verify isolation
   actually holds.
+- 🔒 `SECURITY.md` — security & zero-downtime operations: patching every
+  layer without taking tenants offline (livepatch, planned reboot windows,
+  snapshot-first), hardening beyond the base setup, detection, recovery,
+  and a compromise playbook.
 - ⚙️ `ansible/` — a role that automates most of this: host prep (ZFS, Incus,
   default-deny firewall) and per-tenant provisioning (container, ZFS volume,
   resource limits, rootless Docker, Cloudflare Tunnel config skeleton). See
