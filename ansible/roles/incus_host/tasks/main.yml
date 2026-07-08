@@ -5,10 +5,10 @@
     upgrade: full
     cache_valid_time: 3600
 
-- name: Install zfsutils-linux
+- name: Install zfsutils-linux  # noqa: package-latest
   ansible.builtin.apt:
     name: zfsutils-linux
-    state: present
+    state: latest
 
 - name: Ensure keyrings directory exists
   ansible.builtin.file:
@@ -29,12 +29,12 @@
     content: |
       deb [signed-by=/etc/apt/keyrings/zabbly.asc] https://pkgs.zabbly.com/incus/stable {{ ansible_distribution_release }} main
 
-- name: Install Incus
+- name: Install Incus  # noqa: package-latest
   ansible.builtin.apt:
     name:
       - incus
       - incus-client
-    state: present
+    state: latest
     update_cache: true
 
 - name: Check if Incus is already initialized
@@ -221,10 +221,10 @@
       eth0 network
       {{ incus_host_profile_eth0_network.stdout | trim | default('<unset>', true) }}.
 
-- name: Ensure host firewall default-denies inbound (ufw)
+- name: Ensure host firewall default-denies inbound (ufw)  # noqa: package-latest
   ansible.builtin.apt:
     name: ufw
-    state: present
+    state: latest
 
 - name: Allow SSH before enabling ufw
   community.general.ufw:
@@ -247,10 +247,10 @@
   community.general.ufw:
     state: enabled
 
-- name: Install unattended upgrades
+- name: Install unattended upgrades  # noqa: package-latest
   ansible.builtin.apt:
     name: unattended-upgrades
-    state: present
+    state: latest
   when: incus_host_enable_unattended_upgrades | bool
 
 - name: Enable unattended security upgrades

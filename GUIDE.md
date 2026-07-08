@@ -105,11 +105,18 @@ incus config device add tenant-a data disk \
 incus network create net-tenant-a ipv4.address=10.201.1.1/24 \
   ipv4.nat=true ipv6.address=none
 incus config device override tenant-a eth0 network=net-tenant-a
+incus network acl create tenant-a-deny-private
+incus network acl rule add tenant-a-deny-private egress action=reject \
+  destination=10.0.0.0/8
+incus config device set tenant-a eth0 security.acls=tenant-a-deny-private \
+  security.acls.default.ingress.action=allow \
+  security.acls.default.egress.action=allow
 ```
 
 Repeat per tenant (`tenant-b`, `tenant-c`…), changing only the name and the
 limits. Each one is born with its own view: its own PID 1, its own `/proc`,
-and, in the Ansible defaults, its own NAT bridge.
+and, in the Ansible defaults, its own NAT bridge plus an ACL rejecting private
+egress ranges used for lateral tenant traffic.
 
 > **The limit people forget most**: without `limits.memory` / `limits.cpu`, a
 > tenant can consume all the RAM and OOM-crash its neighbors — visibility

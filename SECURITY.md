@@ -157,11 +157,13 @@ admin path.
   in: `ss -tlnp` on the host should show *nothing* on the public interface.
 - **Inter-tenant traffic**: on a shared bridge, tenants can technically
   reach each other's IPs if they learn them. The default Ansible variables
-  use one NAT bridge per tenant, which is the clearer boundary:
+  use one NAT bridge per tenant plus a per-tenant NIC ACL that rejects
+  egress to RFC1918 private ranges:
 
   ```bash
   incus network create net-tenant-a ipv4.address=10.1.1.1/24 ipv4.nat=true
   incus config device override tenant-a eth0 network=net-tenant-a
+  incus config device set tenant-a eth0 security.acls=tenant-a-deny-private
   ```
 
   Incus ACLs can still be useful, but do not treat a single shared bridge as

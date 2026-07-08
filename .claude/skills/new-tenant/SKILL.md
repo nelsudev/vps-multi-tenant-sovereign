@@ -15,8 +15,8 @@ description: Use when adding a new isolated tenant to the multi-tenant VPS — c
    existing block, change `name`, give it a unique `network.bridge` and
    `network.bridge_ipv4`, and adjust limits. Never omit `limits.memory` or
    `limits.processes`.
-2. Run: `ansible-galaxy collection install -r ansible/requirements.yml`
-   if the collections are not installed yet.
+2. Run: `ansible-galaxy collection install -r ansible/requirements.yml -p ansible/collections --upgrade`
+   to install the latest collections.
 3. Run: `ansible-playbook -i inventory.ini site.yml` (existing tenants are
    detected and skipped).
 
@@ -25,7 +25,8 @@ description: Use when adding a new isolated tenant to the multi-tenant VPS — c
 Follow GUIDE.md §02 → §05 in order: launch (unprivileged + nesting +
 limits), ZFS volume attach at `/data`, `app` user with linger, rootless
 Docker with `data-root` on `/data/docker`, install `cloudflared`, and lay
-down the tunnel config skeleton.
+down the tunnel config skeleton. If private egress blocking is enabled, add
+the tenant NIC ACL and verify it rejects RFC1918 lateral traffic.
 
 ## Always-manual step: the Cloudflare Tunnel
 

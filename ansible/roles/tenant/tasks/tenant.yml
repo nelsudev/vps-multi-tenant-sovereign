@@ -35,6 +35,17 @@
         if incus_tenant_network_mode == 'dedicated_bridge'
         else incus_network
       }}
+    tenant_private_egress_acl_name: "{{ tenant.name }}-deny-private"
+
+- name: "Validate tenant private egress ACL name :: {{ tenant.name }}"
+  ansible.builtin.assert:
+    that:
+      - tenant_private_egress_acl_name | length <= 63
+    fail_msg: >-
+      Tenant {{ tenant.name }} produces ACL name
+      {{ tenant_private_egress_acl_name }}, which is longer than Incus'
+      63-character ACL name limit.
+  when: tenant.network.deny_private_egress | default(true) | bool
 
 - name: "Check tenant network existence :: {{ tenant.name }}"
   ansible.builtin.command: "incus network info {{ tenant_network_name }}"
@@ -53,6 +64,77 @@
   when:
     - incus_tenant_network_mode == "dedicated_bridge"
     - tenant_network_check.rc != 0
+
+- name: "Check tenant private egress ACL :: {{ tenant.name }}"
+  ansible.builtin.command: "incus network acl show {{ tenant_private_egress_acl_name }}"
+  register: tenant_private_egress_acl_show
+  changed_when: false
+  failed_when: false
+  when: tenant.network.deny_private_egress | default(true) | bool
+
+- name: "Create tenant private egress ACL :: {{ tenant.name }}"
+  ansible.builtin.command: "incus network acl create {{ tenant_private_egress_acl_name }}"
+  changed_when: true
+  when:
+    - tenant.network.deny_private_egress | default(true) | bool
+    - tenant_private_egress_acl_show.rc != 0
+
+- name: "Set existing private egress ACL destinations :: {{ tenant.name }}"
+  ansible.builtin.set_fact:
+    tenant_private_egress_acl_destinations: >-
+      {{
+        (
+          (tenant_private_egress_acl_show.stdout | from_yaml).egress
+          | default([], true)
+          | selectattr('action', 'equalto', 'reject')
+          | map(attribute='destination')
+          | list
+        )
+        if tenant_private_egress_acl_show.rc == 0
+        else []
+      }}
+  when: tenant.network.deny_private_egress | default(true) | bool
+
+- name: "Reject private egress ranges in tenant ACL :: {{ tenant.name }}"
+  ansible.builtin.command: >
+    incus network acl rule add {{ tenant_private_egress_acl_name }} egress
+    action=reject destination={{ item }}
+  loop: "{{ incus_private_egress_reject_cidrs }}"
+  changed_when: true
+  when:
+    - tenant.network.deny_private_egress | default(true) | bool
+    - item not in tenant_private_egress_acl_destinations
+
+- name: "Read effective tenant private egress ACL rules :: {{ tenant.name }}"
+  ansible.builtin.command: "incus network acl show {{ tenant_private_egress_acl_name }}"
+  register: tenant_private_egress_acl_effective
+  changed_when: false
+  when: tenant.network.deny_private_egress | default(true) | bool
+
+- name: "Set effective private egress ACL destinations :: {{ tenant.name }}"
+  ansible.builtin.set_fact:
+    tenant_private_egress_acl_effective_destinations: >-
+      {{
+        (tenant_private_egress_acl_effective.stdout | from_yaml).egress
+        | default([], true)
+        | selectattr('action', 'equalto', 'reject')
+        | map(attribute='destination')
+        | list
+      }}
+  when: tenant.network.deny_private_egress | default(true) | bool
+
+- name: "Assert tenant private egress ACL rejects configured CIDRs :: {{ tenant.name }}"
+  ansible.builtin.assert:
+    that:
+      - >-
+        incus_private_egress_reject_cidrs
+        | difference(tenant_private_egress_acl_effective_destinations)
+        | length == 0
+    fail_msg: >-
+      Tenant {{ tenant.name }} ACL {{ tenant_private_egress_acl_name }} is
+      missing one or more reject destinations from
+      {{ incus_private_egress_reject_cidrs }}.
+  when: tenant.network.deny_private_egress | default(true) | bool
 
 - name: "Check if container already exists :: {{ tenant.name }}"
   ansible.builtin.command: "incus info {{ tenant.name }}"
@@ -143,11 +225,27 @@
     limits.egress={{ tenant.network.egress }}
   changed_when: false
 
+- name: "Apply tenant private egress ACL :: {{ tenant.name }}"
+  ansible.builtin.command: >
+    incus config device set {{ tenant.name }} eth0
+    security.acls={{ tenant_private_egress_acl_name }}
+    security.acls.default.ingress.action=allow
+    security.acls.default.egress.action=allow
+  changed_when: false
+  when: tenant.network.deny_private_egress | default(true) | bool
+
 - name: "Read effective tenant network device :: {{ tenant.name }}"
   ansible.builtin.command: >
     incus config device get {{ tenant.name }} eth0 network
   register: tenant_network_effective
   changed_when: false
+
+- name: "Read effective tenant network ACL :: {{ tenant.name }}"
+  ansible.builtin.command: >
+    incus config device get {{ tenant.name }} eth0 security.acls
+  register: tenant_network_acl_effective
+  changed_when: false
+  when: tenant.network.deny_private_egress | default(true) | bool
 
 - name: "Assert tenant uses intended network :: {{ tenant.name }}"
   ansible.builtin.assert:
@@ -158,6 +256,16 @@
       {{ tenant_network_effective.stdout | trim | default('<unset>', true) }},
       expected {{ tenant_network_name }}. Refusing to continue with uncertain
       tenant network isolation.
+
+- name: "Assert tenant uses private egress ACL :: {{ tenant.name }}"
+  ansible.builtin.assert:
+    that:
+      - tenant_network_acl_effective.stdout == tenant_private_egress_acl_name
+    fail_msg: >-
+      Tenant {{ tenant.name }} eth0 is using ACL
+      {{ tenant_network_acl_effective.stdout | default('<unset>') }},
+      expected {{ tenant_private_egress_acl_name }}.
+  when: tenant.network.deny_private_egress | default(true) | bool
 
 - name: "Enable daily container snapshots :: {{ tenant.name }}"
   ansible.builtin.command: >
@@ -245,16 +353,28 @@
     install -d -m 0700 -o app -g app /home/app/.ssh
   changed_when: false
 
-- name: "Install app SSH authorized keys :: {{ tenant.name }}"
+- name: "Render app SSH authorized keys :: {{ tenant.name }}"
+  ansible.builtin.template:
+    src: authorized_keys.j2
+    dest: "/tmp/{{ tenant.name }}-authorized_keys"
+    mode: "0600"
+
+- name: "Copy app SSH authorized keys into container :: {{ tenant.name }}"
+  ansible.builtin.command: >
+    incus file push /tmp/{{ tenant.name }}-authorized_keys
+    {{ tenant.name }}/home/app/.ssh/authorized_keys --mode 0600
+  changed_when: false
+
+- name: "Fix app SSH authorized keys ownership :: {{ tenant.name }}"
   ansible.builtin.command: >
     incus exec {{ tenant.name }} --
-    sh -c "printf '%s\n'
-    {{ tenant.ssh_authorized_keys | default([]) | map('quote') | join(' ') }}
-    > /home/app/.ssh/authorized_keys &&
-    chown app:app /home/app/.ssh/authorized_keys &&
-    chmod 0600 /home/app/.ssh/authorized_keys"
+    chown app:app /home/app/.ssh/authorized_keys
   changed_when: false
-  when: tenant.ssh_authorized_keys | default([]) | length > 0
+
+- name: "Remove local authorized keys file :: {{ tenant.name }}"
+  ansible.builtin.file:
+    path: "/tmp/{{ tenant.name }}-authorized_keys"
+    state: absent
 
 - name: "Harden tenant sshd config :: {{ tenant.name }}"
   ansible.builtin.command: >

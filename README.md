@@ -68,7 +68,7 @@ control back to you only for the Cloudflare login step.
 ```bash
 cd ansible
 cp inventory.example.ini inventory.ini   # point it at your VPS
-ansible-galaxy collection install -r requirements.yml
+ansible-galaxy collection install -r requirements.yml -p collections --upgrade
 # edit group_vars/all.yml — define your tenants and their limits
 ansible-playbook -i inventory.ini site.yml
 ```
@@ -92,15 +92,18 @@ run.
   Docker storage drivers, `systemctl --user` bus errors, tunnel 404/502s,
   headless `cloudflared` login, ZFS ARC memory, capacity planning, tenant
   migration, and accidental deletes.
+- ✅ `TEST_PLAN.md` — static checks plus the SSH-backed validation plan for
+  applying the role to a VPS and proving host, tenant, and neighbor isolation.
 - 🤖 `.claude/skills/` — Claude Code skills for the two recurring operations:
   `new-tenant` (provision + neighbor test) and `migrate-tenant` (move a
   tenant to another host with near-zero downtime). Each skill documents its
   origin (which doc sections it distills) so it can be kept in sync.
 - ⚙️ `ansible/` — a role that automates most of this: host prep (explicit
   ZFS-backed Incus init, NAT bridge, UFW, unattended-upgrades, sysctl
-  hardening), per-tenant dedicated bridges, ZFS volumes, resource limits,
-  rootless Docker, installed `cloudflared`, and a Cloudflare Tunnel config
-  skeleton. See `ansible/group_vars/all.yml` to define tenants and limits.
+  hardening), per-tenant dedicated bridges, private-egress ACLs, ZFS volumes,
+  resource limits, rootless Docker, installed `cloudflared`, and a
+  Cloudflare Tunnel config skeleton. See `ansible/group_vars/all.yml` to
+  define tenants and limits.
 
 ## 🔐 Note on the Cloudflare Tunnel step
 

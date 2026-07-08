@@ -25,7 +25,8 @@ Do this:
 
 1. Set up ansible/inventory.ini from inventory.example.ini pointing at the
    target host. Do not commit it.
-2. Install the Ansible collections from ansible/requirements.yml.
+2. Install the latest Ansible collections from ansible/requirements.yml:
+   `ansible-galaxy collection install -r ansible/requirements.yml -p ansible/collections --upgrade`.
 3. Fill ansible/group_vars/all.yml with the tenant list above and your
    chosen limits — explain your reasoning for the limits you pick.
 4. Run the incus_host role first, verify: ZFS pool exists, Incus is
@@ -41,9 +42,9 @@ Do this:
    tunnel token flow from FAQ.md, whichever is simpler for me to execute),
    then wait for me to paste back the tunnel is live before continuing.
 7. Verify the hardening from SECURITY.md §2: the Ansible defaults apply the
-   sysctl hardening block and dedicated bridge per tenant. Treat hidepid=2
-   as a deliberate manual host change after confirming it won't break
-   monitoring or service management.
+   sysctl hardening block, dedicated bridge per tenant, and private-egress
+   tenant ACL. Treat hidepid=2 as a deliberate manual host change after
+   confirming it won't break monitoring or service management.
 8. Verify unattended-upgrades are enabled on the host per SECURITY.md §1,
    and tell me whether this VPS is eligible for Ubuntu Pro's free tier so I
    can enable Livepatch.
