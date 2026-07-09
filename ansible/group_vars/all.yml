@@ -18,6 +18,9 @@ incus_host_apply_sysctl_hardening: true
 
 # Create one NAT bridge per tenant instead of putting all tenants on incusbr0.
 incus_tenant_network_mode: dedicated_bridge
+incus_tenant_dns_servers:
+  - 1.1.1.1
+  - 9.9.9.9
 incus_private_egress_reject_cidrs:
   - 10.0.0.0/8
   - 172.16.0.0/12

@@ -121,7 +121,7 @@ Expected result:
 - memory and process limits are set.
 - `eth0 network` matches the tenant bridge.
 - `eth0` has the static IPv4 configured for the tenant.
-- resolver DNS points at the tenant bridge gateway.
+- resolver DNS points at the configured public DNS servers.
 - `eth0 security.acls` matches `<tenant>-deny-private` when private egress
   blocking is enabled.
 - the ACL has egress `reject` rules for `10.0.0.0/8`, `172.16.0.0/12`,

@@ -9,4 +9,6 @@ network:
           via: {{ tenant_network_gateway_ipv4 }}
       nameservers:
         addresses:
-          - {{ tenant_network_gateway_ipv4 }}
+{% for dns_server in tenant.network.dns_servers | default(incus_tenant_dns_servers) %}
+          - {{ dns_server }}
+{% endfor %}

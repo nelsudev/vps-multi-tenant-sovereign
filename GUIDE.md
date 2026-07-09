@@ -115,7 +115,7 @@ network:
         - to: default
           via: 10.201.1.1
       nameservers:
-        addresses: [10.201.1.1]
+        addresses: [1.1.1.1, 9.9.9.9]
 EOF
 netplan apply'
 incus network acl create tenant-a-deny-private
@@ -134,8 +134,8 @@ Repeat per tenant (`tenant-b`, `tenant-c`…), changing only the name and the
 limits and static IPv4. Each one is born with its own view: its own PID 1, its
 own `/proc`, and, in the Ansible defaults, its own NAT bridge plus an ACL
 rejecting private egress ranges used for lateral tenant traffic. DNS points to
-that tenant's own bridge gateway, otherwise package installs inside the tenant
-would not be able to resolve public mirrors.
+public resolvers so package installs can resolve public mirrors without
+allowing access to neighboring private networks.
 
 > **The limit people forget most**: without `limits.memory` / `limits.cpu`, a
 > tenant can consume all the RAM and OOM-crash its neighbors — visibility
