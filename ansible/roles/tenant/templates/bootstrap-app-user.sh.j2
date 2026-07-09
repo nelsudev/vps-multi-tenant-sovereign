@@ -49,6 +49,15 @@ else
 fi
 
 if command -v dockerd-rootless-setuptool.sh >/dev/null 2>&1; then
+  if [ -f ~/.config/systemd/user/docker.service ] &&
+    ! grep -q 'dockerd-rootless.sh' ~/.config/systemd/user/docker.service; then
+    systemctl --user stop docker >/dev/null 2>&1 || true
+    rm -f ~/.config/systemd/user/docker.service
+    systemctl --user daemon-reload
+    needs_restart=1
+    mark_changed
+  fi
+
   if [ ! -f ~/.config/systemd/user/docker.service ]; then
     dockerd-rootless-setuptool.sh install
     systemctl --user daemon-reload
