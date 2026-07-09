@@ -84,8 +84,10 @@ Expected result:
 - The default profile root pool is `default`.
 - The default profile `eth0` network is `incusbr0`.
 - UFW is active with incoming denied and outgoing allowed.
-- UFW has routed allow rules for each tenant bridge, while tenant ACLs still
-  reject private lateral egress.
+- UFW has routed allow rules for each tenant bridge.
+- UFW has routed reject rules from each tenant bridge to peer tenant bridge
+  subnets as defense in depth, while tenant ACLs still reject private lateral
+  egress.
 - unattended-upgrades is enabled.
 - sysctl values are `1`, `2`, `1`, and `1`.
 
@@ -129,9 +131,8 @@ Expected result:
   blocking is enabled.
 - the ACL has egress `reject` rules for `10.0.0.0/8`, `172.16.0.0/12`,
   and `192.168.0.0/16`.
-- the ACL allows TCP and UDP DNS to the tenant bridge gateway, so the tenant
-  can resolve public package mirrors while private lateral traffic remains
-  rejected.
+- DNS uses the configured public resolvers, so tenants can resolve public
+  package mirrors while private lateral traffic remains rejected.
 - data volume `size` matches the tenant disk quota. Disk IO
   `limits.read/write` are best-effort because current Incus versions can
   reject them on filesystem-backed custom volumes.
@@ -221,6 +222,8 @@ A deployment is done only when all of these checks pass:
 - SSH preflight proves the target is reachable, privileged commands work, and
   the host has cgroups.
 - The playbook completes successfully twice against the same inventory.
+- The second playbook run does not restart tenants when static netplan state is
+  already unchanged; a restart task marked unchanged is not enough.
 - At least two tenants from `group_vars/all.yml` exist.
 - Every tenant has mandatory CPU, memory, process, disk, and network limits.
 - Every tenant is unprivileged and has nesting enabled.

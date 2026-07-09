@@ -171,9 +171,9 @@ Failure:
 
 Fix:
 
-- The ACL model now allows tenant DNS while still rejecting private lateral
-  egress.
 - Tenants use public DNS resolvers in the static network configuration.
+- Tenant ACLs reject private CIDRs while public DNS remains reachable through
+  the normal public egress path.
 
 Related commits:
 
@@ -208,6 +208,61 @@ Fix:
 Related commit:
 
 - `968ba7d fix(ansible): allow routed tenant bridge egress`
+
+### Routed UFW allow lacked defense in depth
+
+Failure:
+
+- The host UFW routed allow rule permitted egress from each tenant bridge
+  broadly.
+- Tenant-to-tenant isolation still depended on Incus ACL private-CIDR rejects,
+  but UFW did not add a secondary block between tenant bridge subnets.
+
+Fix:
+
+- UFW now adds routed reject rules from each tenant bridge to peer tenant bridge
+  subnets before the broad routed allow.
+- Incus ACLs remain the primary tenant egress isolation control.
+
+Related commit:
+
+- `fix(ansible): avoid unnecessary tenant restarts`
+
+### Static netplan restart was not truly idempotent
+
+Failure:
+
+- The tenant restart after static network configuration ran every playbook run.
+- The task used `changed_when: false`, which hid the service interruption and
+  made the second-run idempotency claim misleading.
+
+Fix:
+
+- The role now compares the rendered netplan content against the file inside
+  the tenant.
+- The netplan file is pushed only when the content differs.
+- The tenant is restarted only when the netplan file changed.
+
+Related commit:
+
+- `fix(ansible): avoid unnecessary tenant restarts`
+
+### Gateway DNS ACL was confusing
+
+Failure:
+
+- The tenant ACL allowed DNS to the tenant bridge gateway, while the netplan
+  configuration used public resolvers.
+- The rule was harmless in the lab but misleading for maintainers.
+
+Fix:
+
+- The gateway DNS allow rule was removed.
+- DNS expectations now refer to the configured public resolvers.
+
+Related commit:
+
+- `fix(ansible): avoid unnecessary tenant restarts`
 
 ### Interrupted package configuration broke a rerun
 

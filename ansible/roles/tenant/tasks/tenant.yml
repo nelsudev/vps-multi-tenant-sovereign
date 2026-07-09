@@ -74,6 +74,22 @@
     interface_in: "{{ tenant_network_name }}"
   when: incus_tenant_network_mode == "dedicated_bridge"
 
+- name: "Reject routed egress to peer tenant bridges through UFW :: {{ tenant.name }}"
+  community.general.ufw:
+    rule: reject
+    route: true
+    interface_in: "{{ tenant_network_name }}"
+    to_ip: "{{ item.network.bridge_ipv4 }}"
+    insert: 1
+    insert_relative_to: first-ipv4
+  loop: "{{ tenants | rejectattr('name', 'equalto', tenant.name) | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - incus_tenant_network_mode == "dedicated_bridge"
+    - tenant.network.deny_private_egress | default(true) | bool
+    - item.network.bridge_ipv4 is defined
+
 - name: "Check tenant private egress ACL :: {{ tenant.name }}"
   ansible.builtin.command: "incus network acl show {{ tenant_private_egress_acl_name }}"
   register: tenant_private_egress_acl_show
@@ -103,37 +119,6 @@
         else []
       }}
   when: tenant.network.deny_private_egress | default(true) | bool
-
-- name: "Set existing private egress ACL DNS allows :: {{ tenant.name }}"
-  ansible.builtin.set_fact:
-    tenant_private_egress_acl_dns_allows: >-
-      {{
-        (
-          (tenant_private_egress_acl_show.stdout | from_yaml).egress
-          | default([], true)
-          | selectattr('action', 'equalto', 'allow')
-          | selectattr('destination', 'equalto', tenant_network_gateway_ipv4 ~ '/32')
-          | selectattr('destination_port', 'equalto', '53')
-          | map(attribute='protocol')
-          | list
-        )
-        if tenant_private_egress_acl_show.rc == 0
-        else []
-      }}
-  when: tenant.network.deny_private_egress | default(true) | bool
-
-- name: "Allow DNS to tenant bridge gateway in private egress ACL :: {{ tenant.name }}"
-  ansible.builtin.command: >
-    incus network acl rule add {{ tenant_private_egress_acl_name }} egress
-    action=allow destination={{ tenant_network_gateway_ipv4 }}/32
-    protocol={{ item }} destination_port=53
-  loop:
-    - udp
-    - tcp
-  changed_when: true
-  when:
-    - tenant.network.deny_private_egress | default(true) | bool
-    - item not in tenant_private_egress_acl_dns_allows
 
 - name: "Reject private egress ranges in tenant ACL :: {{ tenant.name }}"
   ansible.builtin.command: >
@@ -364,12 +349,26 @@
     mode: "0600"
   when: tenant.network.ipv4 is defined
 
+- name: "Check current tenant static netplan :: {{ tenant.name }}"
+  ansible.builtin.command: >
+    incus exec {{ tenant.name }} --
+    cmp -s /etc/netplan/10-lxc.yaml -
+  args:
+    stdin: "{{ lookup('ansible.builtin.file', '/tmp/' ~ tenant.name ~ '-10-lxc.yaml') }}"
+  register: tenant_static_netplan_compare
+  changed_when: false
+  failed_when: false
+  when: tenant.network.ipv4 is defined
+
 - name: "Install tenant static netplan :: {{ tenant.name }}"
   ansible.builtin.command: >
     incus file push /tmp/{{ tenant.name }}-10-lxc.yaml
     {{ tenant.name }}/etc/netplan/10-lxc.yaml --mode 0600
-  changed_when: false
-  when: tenant.network.ipv4 is defined
+  register: tenant_static_netplan_push
+  changed_when: true
+  when:
+    - tenant.network.ipv4 is defined
+    - tenant_static_netplan_compare.rc != 0
 
 - name: "Remove local tenant static netplan :: {{ tenant.name }}"
   ansible.builtin.file:
@@ -379,7 +378,10 @@
 
 - name: "Restart tenant after network configuration :: {{ tenant.name }}"
   ansible.builtin.command: "incus restart {{ tenant.name }}"
-  changed_when: false
+  changed_when: true
+  when:
+    - tenant.network.ipv4 is defined
+    - tenant_static_netplan_push is changed
 
 - name: "Wait for tenant IPv4 after network configuration :: {{ tenant.name }}"
   ansible.builtin.shell: >
