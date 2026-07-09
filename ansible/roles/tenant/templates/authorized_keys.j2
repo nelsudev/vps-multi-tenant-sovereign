@@ -1,0 +1,3 @@
+{% for key in tenant.ssh_authorized_keys | default([]) -%}
+{{ key }}
+{% endfor -%}

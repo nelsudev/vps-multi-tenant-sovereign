@@ -3,11 +3,12 @@
   ansible.builtin.apt:
     update_cache: true
     upgrade: full
+    cache_valid_time: 3600
 
-- name: Install zfsutils-linux
+- name: Install zfsutils-linux  # noqa: package-latest
   ansible.builtin.apt:
     name: zfsutils-linux
-    state: present
+    state: latest
 
 - name: Ensure keyrings directory exists
   ansible.builtin.file:
@@ -21,49 +22,269 @@
     dest: /etc/apt/keyrings/zabbly.asc
     mode: "0644"
 
-- name: Get OS release codename
-  ansible.builtin.command: bash -c ". /etc/os-release; echo $VERSION_CODENAME"
-  register: os_codename
-  changed_when: false
-
 - name: Add Zabbly Incus stable repo
   ansible.builtin.copy:
     dest: /etc/apt/sources.list.d/zabbly-incus-stable.list
     mode: "0644"
     content: |
-      deb [signed-by=/etc/apt/keyrings/zabbly.asc] https://pkgs.zabbly.com/incus/stable {{ os_codename.stdout }} main
+      deb [signed-by=/etc/apt/keyrings/zabbly.asc] https://pkgs.zabbly.com/incus/stable {{ ansible_distribution_release }} main
 
-- name: Install Incus
+- name: Install Incus  # noqa: package-latest
   ansible.builtin.apt:
     name:
       - incus
       - incus-client
-    state: present
+    state: latest
     update_cache: true
 
 - name: Check if Incus is already initialized
-  ansible.builtin.command: incus storage list --format json
-  register: incus_storage_check
+  ansible.builtin.command: incus storage list --format csv -c n,d
+  register: incus_host_storage_check
   changed_when: false
   failed_when: false
 
-- name: Initialize Incus (minimal, ZFS + NAT bridge)
-  ansible.builtin.command: incus admin init --minimal
-  when: incus_storage_check.stdout == "[]" or incus_storage_check.rc != 0
+- name: Find target Incus storage pool
+  ansible.builtin.set_fact:
+    incus_host_target_pool_line: >-
+      {{
+        incus_host_storage_check.stdout_lines
+        | default([])
+        | select('match', '^' ~ incus_storage_pool ~ ',')
+        | list
+        | first
+        | default('')
+      }}
 
-- name: Ensure host firewall default-denies inbound (ufw)
+- name: Refuse non-ZFS target storage pool
+  ansible.builtin.fail:
+    msg: >-
+      Incus pool {{ incus_storage_pool }} already exists with driver
+      {{ incus_host_target_pool_line.split(',')[1] }}. This role requires
+      {{ incus_storage_driver }} so snapshots, quotas, and zfs send/receive
+      behave as documented.
+  when:
+    - incus_host_target_pool_line | length > 0
+    - incus_host_target_pool_line.split(',')[1] != incus_storage_driver
+
+- name: Initialize Incus with explicit ZFS pool and NAT bridge
+  ansible.builtin.command: incus admin init --preseed
+  args:
+    stdin: |
+      config: {}
+      networks:
+        - name: {{ incus_network }}
+          type: bridge
+          config:
+            ipv4.address: {{ incus_network_ipv4_address | quote }}
+            ipv4.nat: "true"
+            ipv6.address: {{ incus_network_ipv6_address | quote }}
+      storage_pools:
+        - name: {{ incus_storage_pool }}
+          driver: {{ incus_storage_driver }}
+          config:
+      {% if incus_storage_source is defined and incus_storage_source | length > 0 %}
+            source: {{ incus_storage_source | quote }}
+      {% else %}
+            size: {{ incus_zfs_pool_size | quote }}
+      {% endif %}
+      profiles:
+        - name: default
+          devices:
+            eth0:
+              name: eth0
+              network: {{ incus_network }}
+              type: nic
+            root:
+              path: /
+              pool: {{ incus_storage_pool }}
+              type: disk
+      projects: []
+      cluster: null
+  changed_when: true
+  when:
+    - incus_host_storage_check.rc != 0 or incus_host_target_pool_line | length == 0
+
+- name: Check default Incus network
+  ansible.builtin.command: "incus network info {{ incus_network }}"
+  register: incus_host_network_check
+  changed_when: false
+  failed_when: false
+
+- name: Create default Incus NAT network
+  ansible.builtin.command: >
+    incus network create {{ incus_network }}
+    ipv4.address={{ incus_network_ipv4_address }}
+    ipv4.nat=true
+    ipv6.address={{ incus_network_ipv6_address }}
+  changed_when: true
+  when: incus_host_network_check.rc != 0
+
+- name: Reconcile default Incus network config
+  ansible.builtin.command: >
+    incus network set {{ incus_network }} {{ item.key }}={{ item.value }}
+  loop:
+    - key: ipv4.nat
+      value: "true"
+    - key: ipv6.address
+      value: "{{ incus_network_ipv6_address }}"
+  changed_when: false
+
+- name: Reconcile default Incus network IPv4 address
+  ansible.builtin.command: >
+    incus network set {{ incus_network }}
+    ipv4.address={{ incus_network_ipv4_address }}
+  changed_when: false
+  when: incus_network_ipv4_address != "auto"
+
+- name: Read default Incus network IPv4 NAT
+  ansible.builtin.command: "incus network get {{ incus_network }} ipv4.nat"
+  register: incus_host_network_ipv4_nat
+  changed_when: false
+
+- name: Read default Incus network IPv4 address
+  ansible.builtin.command: >
+    incus network get {{ incus_network }} ipv4.address
+  register: incus_host_network_ipv4_address
+  changed_when: false
+
+- name: Read default Incus network IPv6 address
+  ansible.builtin.command: >
+    incus network get {{ incus_network }} ipv6.address
+  register: incus_host_network_ipv6_address
+  changed_when: false
+
+- name: Assert default Incus network matches preseed contract
+  ansible.builtin.assert:
+    that:
+      - incus_host_network_ipv4_nat.stdout | trim == "true"
+      - incus_host_network_ipv6_address.stdout | trim == incus_network_ipv6_address
+      - >-
+        incus_network_ipv4_address == "auto" or
+        incus_host_network_ipv4_address.stdout | trim == incus_network_ipv4_address
+    fail_msg: >-
+      Incus network {{ incus_network }} does not match this role's preseed
+      contract. Expected ipv4.nat=true, ipv6.address={{ incus_network_ipv6_address }},
+      and ipv4.address={{ incus_network_ipv4_address }} when not auto.
+
+- name: Ensure default profile has root disk
+  ansible.builtin.command: >
+    incus profile device add default root disk
+    path=/ pool={{ incus_storage_pool }}
+  register: incus_host_profile_root_add
+  changed_when: "'already exists' not in (incus_host_profile_root_add.stderr | lower)"
+  failed_when: >-
+    incus_host_profile_root_add.rc != 0 and
+    'already exists' not in (incus_host_profile_root_add.stderr | lower)
+
+- name: Reconcile default profile root disk
+  ansible.builtin.command: >
+    incus profile device set default root
+    path=/ pool={{ incus_storage_pool }}
+  changed_when: false
+
+- name: Ensure default profile has network device
+  ansible.builtin.command: >
+    incus profile device add default eth0 nic
+    name=eth0 network={{ incus_network }}
+  register: incus_host_profile_eth0_add
+  changed_when: "'already exists' not in (incus_host_profile_eth0_add.stderr | lower)"
+  failed_when: >-
+    incus_host_profile_eth0_add.rc != 0 and
+    'already exists' not in (incus_host_profile_eth0_add.stderr | lower)
+
+- name: Reconcile default profile network device
+  ansible.builtin.command: >
+    incus profile device set default eth0
+    name=eth0 network={{ incus_network }}
+  changed_when: false
+
+- name: Read default profile root pool
+  ansible.builtin.command: incus profile device get default root pool
+  register: incus_host_profile_root_pool
+  changed_when: false
+
+- name: Read default profile eth0 network
+  ansible.builtin.command: incus profile device get default eth0 network
+  register: incus_host_profile_eth0_network
+  changed_when: false
+
+- name: Assert default profile matches preseed contract
+  ansible.builtin.assert:
+    that:
+      - incus_host_profile_root_pool.stdout | trim == incus_storage_pool
+      - incus_host_profile_eth0_network.stdout | trim == incus_network
+    fail_msg: >-
+      The default Incus profile does not match this role's preseed contract.
+      Expected root pool {{ incus_storage_pool }} and eth0 network
+      {{ incus_network }}, got root pool
+      {{ incus_host_profile_root_pool.stdout | trim | default('<unset>', true) }} and
+      eth0 network
+      {{ incus_host_profile_eth0_network.stdout | trim | default('<unset>', true) }}.
+
+- name: Ensure host firewall default-denies inbound (ufw)  # noqa: package-latest
   ansible.builtin.apt:
     name: ufw
-    state: present
+    state: latest
 
-- name: Configure ufw default policies
+- name: Allow SSH before enabling ufw
   community.general.ufw:
-    direction: "{{ item.direction }}"
-    policy: "{{ item.policy }}"
-  loop:
-    - { direction: incoming, policy: deny }
-    - { direction: outgoing, policy: allow }
+    rule: allow
+    port: "{{ incus_host_ufw_ssh_port }}"
+    proto: tcp
+  when: incus_host_ufw_allow_ssh | bool
+
+- name: Configure ufw default incoming policy
+  community.general.ufw:
+    direction: incoming
+    policy: deny
+
+- name: Configure ufw default outgoing policy
+  community.general.ufw:
+    direction: outgoing
+    policy: allow
 
 - name: Enable ufw
   community.general.ufw:
     state: enabled
+
+- name: Install unattended upgrades  # noqa: package-latest
+  ansible.builtin.apt:
+    name: unattended-upgrades
+    state: latest
+  when: incus_host_enable_unattended_upgrades | bool
+
+- name: Enable unattended security upgrades
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    mode: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+  when: incus_host_enable_unattended_upgrades | bool
+
+- name: Disable unattended automatic reboots
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/51vps-sovereign-unattended
+    mode: "0644"
+    content: |
+      Unattended-Upgrade::Automatic-Reboot "false";
+  when: incus_host_enable_unattended_upgrades | bool
+
+- name: Configure host kernel hardening sysctls
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/90-vps-sovereign-hardening.conf
+    mode: "0644"
+    content: |
+      kernel.unprivileged_bpf_disabled = 1
+      kernel.kptr_restrict = 2
+      kernel.dmesg_restrict = 1
+      net.ipv4.conf.all.rp_filter = 1
+  register: incus_host_sysctl_hardening
+  when: incus_host_apply_sysctl_hardening | bool
+
+- name: Apply host kernel hardening sysctls
+  ansible.builtin.command: sysctl --system
+  changed_when: incus_host_sysctl_hardening.changed
+  when:
+    - incus_host_apply_sysctl_hardening | bool
+    - incus_host_sysctl_hardening.changed

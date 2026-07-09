@@ -1,6 +1,6 @@
 ---
 name: migrate-tenant
-description: Use when moving a tenant (Incus container + its data volume) from one VPS host to another with minimal downtime — covers pre-seeding the volume with incremental zfs send, incus move, volume re-attach, and post-move verification.
+description: Use when moving a tenant (Incus container + its data volume) from one VPS host to another with minimal downtime — covers pre-seeding the volume with incremental zfs send, copying the instance, volume re-attach, and post-move verification.
 ---
 
 <!-- Origin: distilled from GUIDE.md + FAQ.md ("How do I move a tenant to a
@@ -38,8 +38,8 @@ incus stop <tenant>
 # final delta — seconds, regardless of volume size
 zfs snapshot <pool>/<tenant>-data@final
 zfs send -i @seed <pool>/<tenant>-data@final | ssh newbox zfs recv <pool>/<tenant>-data
-# move the container: rootfs, config, snapshots, everything inside
-incus move <tenant> newbox:<tenant>
+# copy the container so rollback remains possible on the old host
+incus copy <tenant> newbox:<tenant>
 ```
 
 ### 3. On the new host: re-attach and start
@@ -67,5 +67,5 @@ check `cloudflared` logs inside the tenant, not DNS.
 
 The old host still has everything until you delete it. If the new host
 misbehaves: `incus stop newbox:<tenant>`, restart the tenant on the old
-host (`incus start <tenant>` — it was only stopped, then moved; if moved,
-move it back). Only delete from the old host after verification passes.
+host (`incus start <tenant>`). Only delete from the old host after
+verification passes.

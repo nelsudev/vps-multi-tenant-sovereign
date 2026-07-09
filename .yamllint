@@ -1,0 +1,10 @@
+---
+extends: default
+
+ignore: |
+  .venv/
+  ansible/collections/
+
+rules:
+  line-length:
+    max: 140

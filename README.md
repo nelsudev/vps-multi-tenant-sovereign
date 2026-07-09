@@ -68,6 +68,7 @@ control back to you only for the Cloudflare login step.
 ```bash
 cd ansible
 cp inventory.example.ini inventory.ini   # point it at your VPS
+ansible-galaxy collection install -r requirements.yml -p collections --upgrade
 # edit group_vars/all.yml — define your tenants and their limits
 ansible-playbook -i inventory.ini site.yml
 ```
@@ -91,20 +92,25 @@ run.
   Docker storage drivers, `systemctl --user` bus errors, tunnel 404/502s,
   headless `cloudflared` login, ZFS ARC memory, capacity planning, tenant
   migration, and accidental deletes.
+- ✅ `TEST_PLAN.md` — static checks plus the SSH-backed validation plan for
+  applying the role to a VPS and proving host, tenant, and neighbor isolation.
 - 🤖 `.claude/skills/` — Claude Code skills for the two recurring operations:
   `new-tenant` (provision + neighbor test) and `migrate-tenant` (move a
   tenant to another host with near-zero downtime). Each skill documents its
   origin (which doc sections it distills) so it can be kept in sync.
-- ⚙️ `ansible/` — a role that automates most of this: host prep (ZFS, Incus,
-  default-deny firewall) and per-tenant provisioning (container, ZFS volume,
-  resource limits, rootless Docker, Cloudflare Tunnel config skeleton). See
-  `ansible/group_vars/all.yml` to define tenants and their limits.
+- ⚙️ `ansible/` — a role that automates most of this: host prep (explicit
+  ZFS-backed Incus init, NAT bridge, UFW, unattended-upgrades, sysctl
+  hardening), per-tenant dedicated bridges, private-egress ACLs, ZFS volumes,
+  resource limits, rootless Docker, installed `cloudflared`, and a
+  Cloudflare Tunnel config skeleton. See `ansible/group_vars/all.yml` to
+  define tenants and limits.
 
 ## 🔐 Note on the Cloudflare Tunnel step
 
-`cloudflared tunnel login` / `tunnel create` require interactive browser
-auth against a Cloudflare account, so that step is intentionally left
-manual (documented in the guide) rather than baked into Ansible.
+The Ansible role installs `cloudflared`, but `cloudflared tunnel login` /
+`tunnel create` require interactive browser auth against a Cloudflare
+account. That credential-bearing step is intentionally manual and documented
+in the guide.
 
 ## ✨ Made with Claude Fable
 

@@ -38,6 +38,9 @@ running containers in recent versions, but verify per version).
 
 ### Host userspace: automate it
 
+The Ansible role installs and enables unattended upgrades by default, with
+automatic reboots disabled. Manually, the equivalent is:
+
 ```bash
 apt -y install unattended-upgrades
 dpkg-reconfigure -plow unattended-upgrades
@@ -132,6 +135,11 @@ EOF
 sysctl --system
 ```
 
+The Ansible role applies the sysctl block by default. It does not remount
+`/proc` with `hidepid=2` automatically, because that can affect host-level
+monitoring and service managers; apply it deliberately after testing your
+admin path.
+
 - Keep containers **unprivileged always** — audit with:
 
   ```bash
@@ -147,21 +155,26 @@ sysctl --system
 
 - ufw default-deny inbound (done by the Ansible role). Verify nothing crept
   in: `ss -tlnp` on the host should show *nothing* on the public interface.
-- **Inter-tenant traffic**: on the shared bridge, tenants can technically
-  reach each other's IPs. Block lateral traffic explicitly:
-
-  ```bash
-  # Incus ACL: allow egress to the internet, deny tenant→tenant
-  incus network set incusbr0 security.acls="no-lateral"
-  ```
-
-  or give each tenant its **own bridge** (strongest, what the guide's
-  "bridge própria" implies for paranoid setups):
+- **Inter-tenant traffic**: on a shared bridge, tenants can technically
+  reach each other's IPs if they learn them. The default Ansible variables
+  use one NAT bridge per tenant plus a per-tenant NIC ACL that rejects
+  egress to RFC1918 private ranges:
 
   ```bash
   incus network create net-tenant-a ipv4.address=10.1.1.1/24 ipv4.nat=true
   incus config device override tenant-a eth0 network=net-tenant-a
+  incus config device set tenant-a eth0 security.acls=tenant-a-deny-private
   ```
+
+  Incus ACLs can still be useful, but do not treat a single shared bridge as
+  the primary isolation layer for a hostile multi-tenant setup. Keep the
+  network topology simple enough that the neighbor test is easy to reason
+  about and repeat.
+
+  References:
+
+  - Incus network ACLs: <https://linuxcontainers.org/incus/docs/main/howto/network_acls/>
+  - Incus bridge networks: <https://linuxcontainers.org/incus/docs/main/reference/network_bridge/>
 
 ## 3 · Detection: knowing something's wrong
 

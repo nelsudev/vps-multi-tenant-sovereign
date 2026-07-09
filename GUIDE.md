@@ -43,9 +43,40 @@ sh -c 'echo "deb [signed-by=/etc/apt/keyrings/zabbly.asc] \
   > /etc/apt/sources.list.d/zabbly-incus-stable.list'
 apt update && apt -y install incus incus-client
 
-incus admin init --minimal
-# creates: ZFS pool "default", bridge "incusbr0" (NAT for outbound), default profile
+cat <<'EOF' | incus admin init --preseed
+config: {}
+networks:
+  - name: incusbr0
+    type: bridge
+    config:
+      ipv4.address: auto
+      ipv4.nat: "true"
+      ipv6.address: none
+storage_pools:
+  - name: default
+    driver: zfs
+    config:
+      size: 100GiB
+profiles:
+  - name: default
+    devices:
+      eth0:
+        name: eth0
+        network: incusbr0
+        type: nic
+      root:
+        path: /
+        pool: default
+        type: disk
+projects: []
+cluster: null
+EOF
 ```
+
+The preseed is explicit on purpose: `incus admin init --minimal` is convenient,
+but it does not guarantee a ZFS pool. This design depends on ZFS semantics for
+quotas, snapshots, and `zfs send/receive`, so the storage driver must be
+declared.
 
 **Why ZFS**: each container gets its own dataset. Snapshots are instant, and
 `zfs send/receive` gives you incremental backups per tenant — you copy
@@ -69,11 +100,23 @@ incus launch images:ubuntu/24.04 tenant-a \
 incus storage volume create default tenant-a-data
 incus config device add tenant-a data disk \
   pool=default source=tenant-a-data path=/data
+
+# strongest tenant network isolation: one NAT bridge per tenant
+incus network create net-tenant-a ipv4.address=10.201.1.1/24 \
+  ipv4.nat=true ipv6.address=none
+incus config device override tenant-a eth0 network=net-tenant-a
+incus network acl create tenant-a-deny-private
+incus network acl rule add tenant-a-deny-private egress action=reject \
+  destination=10.0.0.0/8
+incus config device set tenant-a eth0 security.acls=tenant-a-deny-private \
+  security.acls.default.ingress.action=allow \
+  security.acls.default.egress.action=allow
 ```
 
 Repeat per tenant (`tenant-b`, `tenant-c`…), changing only the name and the
 limits. Each one is born with its own view: its own PID 1, its own `/proc`,
-its own network on the NAT bridge.
+and, in the Ansible defaults, its own NAT bridge plus an ACL rejecting private
+egress ranges used for lateral tenant traffic.
 
 > **The limit people forget most**: without `limits.memory` / `limits.cpu`, a
 > tenant can consume all the RAM and OOM-crash its neighbors — visibility
@@ -85,7 +128,10 @@ its own network on the NAT bridge.
 incus exec tenant-a -- bash
 # --- now inside the container ---
 apt update && apt -y install uidmap dbus-user-session \
-  docker.io docker-compose-v2 openssh-server curl
+  docker.io docker-compose-v2 openssh-server curl fuse-overlayfs slirp4netns
+
+# keep Docker rootless-only inside the tenant
+systemctl disable --now docker.service docker.socket
 
 useradd -m -s /bin/bash app
 loginctl enable-linger app        # the user's services survive logout
@@ -127,8 +173,10 @@ never touches tenant-b's network config.
 ```bash
 # install cloudflared inside the container
 curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg \
-  | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
-# (cloudflared apt repo) → apt install cloudflared
+  -o /usr/share/keyrings/cloudflare-main.gpg
+echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main' \
+  > /etc/apt/sources.list.d/cloudflared.list
+apt update && apt -y install cloudflared
 
 cloudflared tunnel login
 cloudflared tunnel create tenant-a
@@ -179,6 +227,11 @@ ssh -o ProxyCommand="cloudflared access ssh --hostname %h" \
   app@ssh-a.yourdomain.tld
 ```
 
+The Ansible defaults harden the tenant's `sshd` to disallow passwords and
+root login. Add public keys under `tenant.ssh_authorized_keys` in
+`ansible/group_vars/all.yml` if you want direct `app` SSH after the tunnel is
+live.
+
 ## 06 · Persistent storage & backups
 
 ```bash
@@ -217,6 +270,9 @@ Final host hardening checklist:
 - **Default-deny inbound firewall** — with a Cloudflare Tunnel you don't
   need any open port (not even 80/443). Host SSH only over WireGuard, if
   using Option B.
+- **Host unattended-upgrades + sysctl hardening** — automated by the Ansible
+  role defaults. `hidepid=2` remains a manual host decision because it can
+  affect monitoring and service managers.
 - **Confirm unprivileged** — `incus config get tenant-a
   security.privileged` must return `false`/empty.
 - **No sudo for `app`** — after provisioning, remove the user from any

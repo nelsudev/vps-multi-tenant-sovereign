@@ -6,25 +6,65 @@
 # automatable without your Cloudflare credentials).
 set -euo pipefail
 
+changed=0
+needs_restart=0
+
+mark_changed() {
+  changed=1
+}
+
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+
 if ! command -v dockerd-rootless-setuptool.sh >/dev/null 2>&1; then
   echo "dockerd-rootless-setuptool.sh not found — is docker.io installed?" >&2
   exit 1
 fi
 
-dockerd-rootless-setuptool.sh install || true
-systemctl --user enable --now docker
+if ! systemctl --user show-environment >/dev/null 2>&1; then
+  echo "systemd user bus is not available for app; check loginctl linger" >&2
+  exit 1
+fi
 
 mkdir -p "{{ tenant.data_root }}"
 mkdir -p ~/.config/docker
-cat > ~/.config/docker/daemon.json <<EOF
+
+desired_daemon_json="$(mktemp)"
+cat > "${desired_daemon_json}" <<EOF
 { "data-root": "{{ tenant.data_root }}" }
 EOF
 
-systemctl --user stop docker || true
-systemctl --user start docker
+if [ ! -f ~/.config/docker/daemon.json ] || \
+  ! cmp -s "${desired_daemon_json}" ~/.config/docker/daemon.json; then
+  mv "${desired_daemon_json}" ~/.config/docker/daemon.json
+  needs_restart=1
+  mark_changed
+else
+  rm -f "${desired_daemon_json}"
+fi
+
+if [ ! -f ~/.config/systemd/user/docker.service ]; then
+  dockerd-rootless-setuptool.sh install
+  mark_changed
+fi
+
+if ! systemctl --user is-enabled docker >/dev/null 2>&1; then
+  systemctl --user enable docker
+  mark_changed
+fi
+
+if ! systemctl --user is-active docker >/dev/null 2>&1; then
+  systemctl --user start docker
+  mark_changed
+elif [ "${needs_restart}" -eq 1 ]; then
+  systemctl --user restart docker
+fi
 
 grep -qxF 'export DOCKER_HOST=unix:///run/user/$(id -u)/docker.sock' ~/.bashrc || \
-  echo 'export DOCKER_HOST=unix:///run/user/$(id -u)/docker.sock' >> ~/.bashrc
+  {
+    echo 'export DOCKER_HOST=unix:///run/user/$(id -u)/docker.sock' >> ~/.bashrc
+    mark_changed
+  }
 
 mkdir -p ~/.cloudflared
 if [ ! -f ~/.cloudflared/config.yml ]; then
@@ -40,6 +80,8 @@ if [ ! -f ~/.cloudflared/config.yml ]; then
 #     service: http://localhost:8080
 #   - service: http_status:404
 EOF
+  mark_changed
 fi
 
 echo "bootstrap for {{ tenant.name }} complete"
+echo "changed=${changed}"

@@ -1,11 +1,148 @@
 ---
-- name: "{{ tenant.name }} :: check if container already exists"
+- name: "Validate required tenant limits :: {{ tenant.name }}"
+  ansible.builtin.assert:
+    that:
+      - tenant.name is defined
+      - tenant.limits.cpu is defined
+      - tenant.limits.memory is defined
+      - tenant.limits.processes is defined
+      - tenant.disk.size is defined
+      - tenant.disk.read is defined
+      - tenant.disk.write is defined
+      - tenant.network.ingress is defined
+      - tenant.network.egress is defined
+      - tenant.data_root is defined
+    fail_msg: >-
+      Tenant {{ tenant.name | default('<unnamed>') }} is missing one or more
+      mandatory limits. CPU, memory, processes, disk, network, and data_root
+      must be explicit.
+
+- name: "Validate dedicated tenant bridge config :: {{ tenant.name }}"
+  ansible.builtin.assert:
+    that:
+      - tenant.network.bridge is defined
+      - tenant.network.bridge_ipv4 is defined
+    fail_msg: >-
+      Tenant {{ tenant.name }} needs network.bridge and network.bridge_ipv4
+      when incus_tenant_network_mode is dedicated_bridge.
+  when: incus_tenant_network_mode == "dedicated_bridge"
+
+- name: "Set tenant network facts :: {{ tenant.name }}"
+  ansible.builtin.set_fact:
+    tenant_network_name: >-
+      {{
+        tenant.network.bridge
+        if incus_tenant_network_mode == 'dedicated_bridge'
+        else incus_network
+      }}
+    tenant_private_egress_acl_name: "{{ tenant.name }}-deny-private"
+
+- name: "Validate tenant private egress ACL name :: {{ tenant.name }}"
+  ansible.builtin.assert:
+    that:
+      - tenant_private_egress_acl_name | length <= 63
+    fail_msg: >-
+      Tenant {{ tenant.name }} produces ACL name
+      {{ tenant_private_egress_acl_name }}, which is longer than Incus'
+      63-character ACL name limit.
+  when: tenant.network.deny_private_egress | default(true) | bool
+
+- name: "Check tenant network existence :: {{ tenant.name }}"
+  ansible.builtin.command: "incus network info {{ tenant_network_name }}"
+  register: tenant_network_check
+  changed_when: false
+  failed_when: false
+  when: incus_tenant_network_mode == "dedicated_bridge"
+
+- name: "Create dedicated tenant network :: {{ tenant.name }}"
+  ansible.builtin.command: >-
+    incus network create {{ tenant_network_name }}
+    ipv4.address={{ tenant.network.bridge_ipv4 }}
+    ipv4.nat=true
+    ipv6.address=none
+  changed_when: true
+  when:
+    - incus_tenant_network_mode == "dedicated_bridge"
+    - tenant_network_check.rc != 0
+
+- name: "Check tenant private egress ACL :: {{ tenant.name }}"
+  ansible.builtin.command: "incus network acl show {{ tenant_private_egress_acl_name }}"
+  register: tenant_private_egress_acl_show
+  changed_when: false
+  failed_when: false
+  when: tenant.network.deny_private_egress | default(true) | bool
+
+- name: "Create tenant private egress ACL :: {{ tenant.name }}"
+  ansible.builtin.command: "incus network acl create {{ tenant_private_egress_acl_name }}"
+  changed_when: true
+  when:
+    - tenant.network.deny_private_egress | default(true) | bool
+    - tenant_private_egress_acl_show.rc != 0
+
+- name: "Set existing private egress ACL destinations :: {{ tenant.name }}"
+  ansible.builtin.set_fact:
+    tenant_private_egress_acl_destinations: >-
+      {{
+        (
+          (tenant_private_egress_acl_show.stdout | from_yaml).egress
+          | default([], true)
+          | selectattr('action', 'equalto', 'reject')
+          | map(attribute='destination')
+          | list
+        )
+        if tenant_private_egress_acl_show.rc == 0
+        else []
+      }}
+  when: tenant.network.deny_private_egress | default(true) | bool
+
+- name: "Reject private egress ranges in tenant ACL :: {{ tenant.name }}"
+  ansible.builtin.command: >
+    incus network acl rule add {{ tenant_private_egress_acl_name }} egress
+    action=reject destination={{ item }}
+  loop: "{{ incus_private_egress_reject_cidrs }}"
+  changed_when: true
+  when:
+    - tenant.network.deny_private_egress | default(true) | bool
+    - item not in tenant_private_egress_acl_destinations
+
+- name: "Read effective tenant private egress ACL rules :: {{ tenant.name }}"
+  ansible.builtin.command: "incus network acl show {{ tenant_private_egress_acl_name }}"
+  register: tenant_private_egress_acl_effective
+  changed_when: false
+  when: tenant.network.deny_private_egress | default(true) | bool
+
+- name: "Set effective private egress ACL destinations :: {{ tenant.name }}"
+  ansible.builtin.set_fact:
+    tenant_private_egress_acl_effective_destinations: >-
+      {{
+        (tenant_private_egress_acl_effective.stdout | from_yaml).egress
+        | default([], true)
+        | selectattr('action', 'equalto', 'reject')
+        | map(attribute='destination')
+        | list
+      }}
+  when: tenant.network.deny_private_egress | default(true) | bool
+
+- name: "Assert tenant private egress ACL rejects configured CIDRs :: {{ tenant.name }}"
+  ansible.builtin.assert:
+    that:
+      - >-
+        incus_private_egress_reject_cidrs
+        | difference(tenant_private_egress_acl_effective_destinations)
+        | length == 0
+    fail_msg: >-
+      Tenant {{ tenant.name }} ACL {{ tenant_private_egress_acl_name }} is
+      missing one or more reject destinations from
+      {{ incus_private_egress_reject_cidrs }}.
+  when: tenant.network.deny_private_egress | default(true) | bool
+
+- name: "Check if container already exists :: {{ tenant.name }}"
   ansible.builtin.command: "incus info {{ tenant.name }}"
   register: tenant_exists
   changed_when: false
   failed_when: false
 
-- name: "{{ tenant.name }} :: launch unprivileged container with nesting"
+- name: "Launch unprivileged container with nesting :: {{ tenant.name }}"
   ansible.builtin.command: >
     incus launch images:ubuntu/24.04 {{ tenant.name }}
     -c security.nesting=true
@@ -14,93 +151,268 @@
     -c limits.memory={{ tenant.limits.memory }}
     -c limits.memory.swap=false
     -c limits.processes={{ tenant.limits.processes }}
+  changed_when: true
   when: tenant_exists.rc != 0
 
-- name: "{{ tenant.name }} :: wait for network in container"
-  ansible.builtin.command: "incus exec {{ tenant.name }} -- cloud-init status --wait"
+- name: "Wait for cloud-init after launch :: {{ tenant.name }}"
+  ansible.builtin.command: >-
+    incus exec {{ tenant.name }} -- cloud-init status --wait
   changed_when: false
   failed_when: false
   when: tenant_exists.rc != 0
 
-- name: "{{ tenant.name }} :: create dedicated ZFS storage volume"
-  ansible.builtin.command: "incus storage volume create {{ incus_storage_pool }} {{ tenant.name }}-data"
-  register: vol_create
-  changed_when: "'already exists' not in vol_create.stderr"
-  failed_when: vol_create.rc != 0 and 'already exists' not in vol_create.stderr
+- name: "Apply tenant cgroup limits :: {{ tenant.name }}"
+  ansible.builtin.command: >
+    incus config set {{ tenant.name }}
+    security.nesting=true
+    security.privileged=false
+    limits.cpu={{ tenant.limits.cpu }}
+    limits.memory={{ tenant.limits.memory }}
+    limits.memory.swap=false
+    limits.processes={{ tenant.limits.processes }}
+  changed_when: false
 
-- name: "{{ tenant.name }} :: attach data volume to container"
+- name: "Create dedicated ZFS storage volume :: {{ tenant.name }}"
+  ansible.builtin.command: >-
+    incus storage volume create {{ incus_storage_pool }}
+    {{ tenant.name }}-data
+  register: tenant_vol_create
+  changed_when: "'already exists' not in tenant_vol_create.stderr"
+  failed_when: >-
+    tenant_vol_create.rc != 0 and
+    'already exists' not in tenant_vol_create.stderr
+
+- name: "Enable daily data volume snapshots :: {{ tenant.name }}"
+  ansible.builtin.command: >
+    incus storage volume set {{ incus_storage_pool }} {{ tenant.name }}-data
+    snapshots.schedule=@daily
+    snapshots.expiry=7d
+  changed_when: false
+
+- name: "Attach data volume to container :: {{ tenant.name }}"
   ansible.builtin.command: >
     incus config device add {{ tenant.name }} data disk
     pool={{ incus_storage_pool }} source={{ tenant.name }}-data path=/data
-  register: dev_add
-  changed_when: "'already exists' not in dev_add.stderr"
-  failed_when: dev_add.rc != 0 and 'already exists' not in dev_add.stderr
+  register: tenant_dev_add
+  changed_when: "'already exists' not in tenant_dev_add.stderr"
+  failed_when: >-
+    tenant_dev_add.rc != 0 and
+    'already exists' not in tenant_dev_add.stderr
 
-- name: "{{ tenant.name }} :: set disk quota and IO limits"
+- name: "Set disk quota and IO limits :: {{ tenant.name }}"
   ansible.builtin.command: >
     incus config device set {{ tenant.name }} data
     limits.max={{ tenant.disk.size }}
     limits.read={{ tenant.disk.read }}
     limits.write={{ tenant.disk.write }}
+  changed_when: false
 
-- name: "{{ tenant.name }} :: set network bandwidth limits"
+- name: "Override tenant network device :: {{ tenant.name }}"
+  ansible.builtin.command: >
+    incus config device override {{ tenant.name }} eth0
+    network={{ tenant_network_name }}
+  register: tenant_network_override
+  changed_when: tenant_network_override.rc == 0
+  failed_when: >-
+    tenant_network_override.rc != 0 and
+    'already exists' not in (tenant_network_override.stderr | lower)
+
+- name: "Set network and bandwidth limits :: {{ tenant.name }}"
   ansible.builtin.command: >
     incus config device set {{ tenant.name }} eth0
+    network={{ tenant_network_name }}
     limits.ingress={{ tenant.network.ingress }}
     limits.egress={{ tenant.network.egress }}
+  changed_when: false
 
-- name: "{{ tenant.name }} :: enable daily snapshots, 7 day retention"
+- name: "Apply tenant private egress ACL :: {{ tenant.name }}"
+  ansible.builtin.command: >
+    incus config device set {{ tenant.name }} eth0
+    security.acls={{ tenant_private_egress_acl_name }}
+    security.acls.default.ingress.action=allow
+    security.acls.default.egress.action=allow
+  changed_when: false
+  when: tenant.network.deny_private_egress | default(true) | bool
+
+- name: "Read effective tenant network device :: {{ tenant.name }}"
+  ansible.builtin.command: >
+    incus config device get {{ tenant.name }} eth0 network
+  register: tenant_network_effective
+  changed_when: false
+
+- name: "Read effective tenant network ACL :: {{ tenant.name }}"
+  ansible.builtin.command: >
+    incus config device get {{ tenant.name }} eth0 security.acls
+  register: tenant_network_acl_effective
+  changed_when: false
+  when: tenant.network.deny_private_egress | default(true) | bool
+
+- name: "Assert tenant uses intended network :: {{ tenant.name }}"
+  ansible.builtin.assert:
+    that:
+      - tenant_network_effective.stdout | trim == tenant_network_name
+    fail_msg: >-
+      Tenant {{ tenant.name }} eth0 is attached to
+      {{ tenant_network_effective.stdout | trim | default('<unset>', true) }},
+      expected {{ tenant_network_name }}. Refusing to continue with uncertain
+      tenant network isolation.
+
+- name: "Assert tenant uses private egress ACL :: {{ tenant.name }}"
+  ansible.builtin.assert:
+    that:
+      - tenant_network_acl_effective.stdout == tenant_private_egress_acl_name
+    fail_msg: >-
+      Tenant {{ tenant.name }} eth0 is using ACL
+      {{ tenant_network_acl_effective.stdout | default('<unset>') }},
+      expected {{ tenant_private_egress_acl_name }}.
+  when: tenant.network.deny_private_egress | default(true) | bool
+
+- name: "Enable daily container snapshots :: {{ tenant.name }}"
   ansible.builtin.command: >
     incus config set {{ tenant.name }}
     snapshots.schedule=@daily
     snapshots.expiry=7d
+  changed_when: false
 
-- name: "{{ tenant.name }} :: install base packages inside container"
+- name: "Install base package index inside container :: {{ tenant.name }}"
   ansible.builtin.command: >
     incus exec {{ tenant.name }} --
     apt-get update
   changed_when: false
 
-- name: "{{ tenant.name }} :: install docker, ssh, uidmap inside container"
+- name: "Install tenant runtime packages :: {{ tenant.name }}"
   ansible.builtin.command: >
     incus exec {{ tenant.name }} --
-    apt-get install -y uidmap dbus-user-session docker.io docker-compose-v2 openssh-server curl
+    apt-get install -y
+    ca-certificates
+    curl
+    dbus-user-session
+    docker-compose-v2
+    docker.io
+    fuse-overlayfs
+    openssh-server
+    slirp4netns
+    uidmap
   changed_when: false
 
-- name: "{{ tenant.name }} :: create unprivileged app user"
-  ansible.builtin.command: "incus exec {{ tenant.name }} -- useradd -m -s /bin/bash app"
-  register: user_create
-  changed_when: user_create.rc == 0
-  failed_when: user_create.rc != 0 and 'already exists' not in user_create.stderr
-
-- name: "{{ tenant.name }} :: enable lingering for app user (rootless services survive logout)"
-  ansible.builtin.command: "incus exec {{ tenant.name }} -- loginctl enable-linger app"
+- name: "Ensure Cloudflare apt keyring directory exists :: {{ tenant.name }}"
+  ansible.builtin.command: >
+    incus exec {{ tenant.name }} --
+    install -d -m 0755 /usr/share/keyrings
   changed_when: false
 
-- name: "{{ tenant.name }} :: give app user ownership of /data"
+- name: "Install Cloudflare apt key :: {{ tenant.name }}"
+  ansible.builtin.command: >
+    incus exec {{ tenant.name }} --
+    curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg
+    -o /usr/share/keyrings/cloudflare-main.gpg
+  changed_when: false
+
+- name: "Configure Cloudflare apt repository :: {{ tenant.name }}"
+  ansible.builtin.command: >
+    incus exec {{ tenant.name }} --
+    sh -c "printf '%s\n'
+    'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main'
+    > /etc/apt/sources.list.d/cloudflared.list"
+  changed_when: false
+
+- name: "Install cloudflared inside container :: {{ tenant.name }}"
+  ansible.builtin.command: >
+    incus exec {{ tenant.name }} --
+    sh -c "apt-get update && apt-get install -y cloudflared"
+  changed_when: false
+
+- name: "Disable rootful docker daemon inside container :: {{ tenant.name }}"
+  ansible.builtin.command: >
+    incus exec {{ tenant.name }} --
+    systemctl disable --now docker.service docker.socket
+  changed_when: false
+  failed_when: false
+
+- name: "Create unprivileged app user :: {{ tenant.name }}"
+  ansible.builtin.command: >-
+    incus exec {{ tenant.name }} -- useradd -m -s /bin/bash app
+  register: tenant_user_create
+  changed_when: tenant_user_create.rc == 0
+  failed_when: >-
+    tenant_user_create.rc != 0 and
+    'already exists' not in tenant_user_create.stderr
+
+- name: "Enable lingering for app user :: {{ tenant.name }}"
+  ansible.builtin.command: >-
+    incus exec {{ tenant.name }} -- loginctl enable-linger app
+  changed_when: false
+
+- name: "Give app user ownership of data volume :: {{ tenant.name }}"
   ansible.builtin.command: "incus exec {{ tenant.name }} -- chown app:app /data"
   changed_when: false
 
-- name: "{{ tenant.name }} :: push rootless docker + cloudflared bootstrap script"
+- name: "Create app SSH directory :: {{ tenant.name }}"
+  ansible.builtin.command: >
+    incus exec {{ tenant.name }} --
+    install -d -m 0700 -o app -g app /home/app/.ssh
+  changed_when: false
+
+- name: "Render app SSH authorized keys :: {{ tenant.name }}"
+  ansible.builtin.template:
+    src: authorized_keys.j2
+    dest: "/tmp/{{ tenant.name }}-authorized_keys"
+    mode: "0600"
+
+- name: "Copy app SSH authorized keys into container :: {{ tenant.name }}"
+  ansible.builtin.command: >
+    incus file push /tmp/{{ tenant.name }}-authorized_keys
+    {{ tenant.name }}/home/app/.ssh/authorized_keys --mode 0600
+  changed_when: false
+
+- name: "Fix app SSH authorized keys ownership :: {{ tenant.name }}"
+  ansible.builtin.command: >
+    incus exec {{ tenant.name }} --
+    chown app:app /home/app/.ssh/authorized_keys
+  changed_when: false
+
+- name: "Remove local authorized keys file :: {{ tenant.name }}"
+  ansible.builtin.file:
+    path: "/tmp/{{ tenant.name }}-authorized_keys"
+    state: absent
+
+- name: "Harden tenant sshd config :: {{ tenant.name }}"
+  ansible.builtin.command: >
+    incus exec {{ tenant.name }} --
+    sh -c "printf '%s\n'
+    'PasswordAuthentication no'
+    'PermitRootLogin no'
+    'PubkeyAuthentication yes'
+    'AllowUsers app'
+    > /etc/ssh/sshd_config.d/90-vps-sovereign.conf"
+  changed_when: false
+
+- name: "Restart tenant sshd after hardening :: {{ tenant.name }}"
+  ansible.builtin.command: >
+    incus exec {{ tenant.name }} --
+    systemctl restart ssh
+  changed_when: false
+
+- name: "Render rootless docker bootstrap script :: {{ tenant.name }}"
   ansible.builtin.template:
     src: bootstrap-app-user.sh.j2
     dest: "/tmp/{{ tenant.name }}-bootstrap.sh"
     mode: "0755"
 
-- name: "{{ tenant.name }} :: copy bootstrap script into container"
+- name: "Copy bootstrap script into container :: {{ tenant.name }}"
   ansible.builtin.command: >
     incus file push /tmp/{{ tenant.name }}-bootstrap.sh
     {{ tenant.name }}/tmp/bootstrap.sh --mode 0755
   changed_when: false
 
-- name: "{{ tenant.name }} :: run bootstrap script as app user"
+- name: "Run bootstrap script as app user :: {{ tenant.name }}"
   ansible.builtin.command: >
     incus exec {{ tenant.name }} --
     su - app -c "bash /tmp/bootstrap.sh"
-  register: bootstrap_run
-  changed_when: true
+  register: tenant_bootstrap_run
+  changed_when: "'changed=1' in tenant_bootstrap_run.stdout"
 
-- name: "{{ tenant.name }} :: remove local temp bootstrap script"
+- name: "Remove local temp bootstrap script :: {{ tenant.name }}"
   ansible.builtin.file:
     path: "/tmp/{{ tenant.name }}-bootstrap.sh"
     state: absent
