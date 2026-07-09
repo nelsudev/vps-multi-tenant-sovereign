@@ -127,6 +127,25 @@ Expected result:
 
 ## 6. Neighbor test
 
+This test requires at least two tenants. It proves isolation with active
+markers, not just by visually inspecting empty output.
+
+Create tenant-specific filesystem, process, and Docker markers:
+
+```bash
+tenant_a=tenant-a
+tenant_b=tenant-b
+
+incus exec "$tenant_a" -- su - app -c 'printf "%s\n" tenant-a-only > /data/tenant-a-proof.txt'
+incus exec "$tenant_b" -- su - app -c 'printf "%s\n" tenant-b-only > /data/tenant-b-proof.txt'
+
+incus exec "$tenant_a" -- su - app -c 'nohup bash -lc "exec -a tenant-a-process-marker sleep 3600" >/tmp/tenant-a-process.log 2>&1 &'
+incus exec "$tenant_b" -- su - app -c 'nohup bash -lc "exec -a tenant-b-process-marker sleep 3600" >/tmp/tenant-b-process.log 2>&1 &'
+
+incus exec "$tenant_a" -- su - app -c 'export DOCKER_HOST=unix:///run/user/$(id -u)/docker.sock; docker rm -f tenant-a-docker-marker >/dev/null 2>&1 || true; docker run -d --name tenant-a-docker-marker alpine:3.20 sleep 3600'
+incus exec "$tenant_b" -- su - app -c 'export DOCKER_HOST=unix:///run/user/$(id -u)/docker.sock; docker rm -f tenant-b-docker-marker >/dev/null 2>&1 || true; docker run -d --name tenant-b-docker-marker alpine:3.20 sleep 3600'
+```
+
 Run from inside each tenant as `app`:
 
 ```bash
@@ -141,11 +160,26 @@ incus exec "$tenant" -- su - app -c 'export DOCKER_HOST=unix:///run/user/$(id -u
 Expected result: output only shows processes, sockets, interfaces, cgroups,
 and Docker containers belonging to that tenant.
 
-If at least two tenants exist, resolve their IPs and test lateral blocking:
+Assert tenant A cannot see tenant B's active markers, and tenant B cannot see
+tenant A's active markers:
 
 ```bash
-tenant_a=tenant-a
-tenant_b=tenant-b
+incus exec "$tenant_a" -- su - app -c 'test -f /data/tenant-a-proof.txt'
+incus exec "$tenant_a" -- su - app -c 'test ! -f /data/tenant-b-proof.txt'
+incus exec "$tenant_a" -- su - app -c '! ps aux | grep -F "[t]enant-b-process-marker"'
+incus exec "$tenant_a" -- su - app -c 'export DOCKER_HOST=unix:///run/user/$(id -u)/docker.sock; docker ps --format "{{.Names}}" | grep -Fx tenant-a-docker-marker'
+incus exec "$tenant_a" -- su - app -c 'export DOCKER_HOST=unix:///run/user/$(id -u)/docker.sock; ! docker ps --format "{{.Names}}" | grep -Fx tenant-b-docker-marker'
+
+incus exec "$tenant_b" -- su - app -c 'test -f /data/tenant-b-proof.txt'
+incus exec "$tenant_b" -- su - app -c 'test ! -f /data/tenant-a-proof.txt'
+incus exec "$tenant_b" -- su - app -c '! ps aux | grep -F "[t]enant-a-process-marker"'
+incus exec "$tenant_b" -- su - app -c 'export DOCKER_HOST=unix:///run/user/$(id -u)/docker.sock; docker ps --format "{{.Names}}" | grep -Fx tenant-b-docker-marker'
+incus exec "$tenant_b" -- su - app -c 'export DOCKER_HOST=unix:///run/user/$(id -u)/docker.sock; ! docker ps --format "{{.Names}}" | grep -Fx tenant-a-docker-marker'
+```
+
+Resolve tenant IPs and test lateral blocking:
+
+```bash
 ip_b=$(incus list "$tenant_b" -c 4 --format csv | cut -d' ' -f1)
 incus exec "$tenant_a" -- ping -c 2 -W 2 "$ip_b"
 ```
@@ -153,6 +187,44 @@ incus exec "$tenant_a" -- ping -c 2 -W 2 "$ip_b"
 Expected result: ping from tenant A to tenant B fails. If it succeeds, do not
 accept the deployment; inspect `security.acls` on the tenant NICs and host
 forwarding/firewall state.
+
+Clean up the active markers after the assertions:
+
+```bash
+incus exec "$tenant_a" -- su - app -c 'rm -f /data/tenant-a-proof.txt; pkill -f tenant-a-process-marker || true; export DOCKER_HOST=unix:///run/user/$(id -u)/docker.sock; docker rm -f tenant-a-docker-marker'
+incus exec "$tenant_b" -- su - app -c 'rm -f /data/tenant-b-proof.txt; pkill -f tenant-b-process-marker || true; export DOCKER_HOST=unix:///run/user/$(id -u)/docker.sock; docker rm -f tenant-b-docker-marker'
+```
+
+## Definition of done
+
+A deployment is done only when all of these checks pass:
+
+- Static checks exit `0`: collection install, syntax check, `ansible-lint`,
+  `yamllint`, shell syntax, and `git diff --check`.
+- SSH preflight proves the target is reachable, privileged commands work, and
+  the host has cgroups.
+- The playbook completes successfully twice against the same inventory.
+- At least two tenants from `group_vars/all.yml` exist.
+- Every tenant has mandatory CPU, memory, process, disk, and network limits.
+- Every tenant is unprivileged and has nesting enabled.
+- Every tenant has its own network bridge and expected private-egress ACL.
+- Every tenant has its own ZFS-backed data volume and daily snapshot schedule.
+- The `app` user exists inside each tenant and rootless Docker reports
+  `/data/docker`.
+- Tenant A's `/data` marker file is visible from tenant A and not visible from
+  tenant B; tenant B's marker file is visible from tenant B and not visible
+  from tenant A.
+- Tenant A's process marker is visible from tenant A and not visible from
+  tenant B; tenant B's process marker is visible from tenant B and not visible
+  from tenant A.
+- Tenant A's Docker marker container is visible from tenant A's rootless Docker
+  daemon and not visible from tenant B's daemon; tenant B's Docker marker
+  container has the opposite result.
+- Tenant-to-tenant ping fails.
+- The selected ingress path works:
+  Cloudflare Tunnel for production, or temporary `nip.io` direct ingress for
+  the Hetzner lab.
+- Temporary test ingress and marker resources are removed after validation.
 
 ## 7. Cloudflare tunnel handoff
 

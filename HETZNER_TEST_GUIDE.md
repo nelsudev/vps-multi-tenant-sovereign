@@ -246,6 +246,19 @@ ssh root@"$PUBLIC_IPV4" \
 Expected result: the ping fails. If it succeeds, stop and inspect tenant NIC
 ACLs before accepting the deployment.
 
+For the lab to count, the active-marker neighbor test from `TEST_PLAN.md`
+section 6 must pass as written:
+
+- tenant A's file marker is visible only inside tenant A.
+- tenant B's file marker is visible only inside tenant B.
+- tenant A's process marker is visible only from tenant A's `ps`.
+- tenant B's process marker is visible only from tenant B's `ps`.
+- tenant A's Docker marker container is visible only from tenant A's rootless
+  Docker daemon.
+- tenant B's Docker marker container is visible only from tenant B's rootless
+  Docker daemon.
+- tenant A cannot ping tenant B.
+
 ## 08 - Temporary direct ingress with public ports
 
 This path is the fastest public smoke test. It opens one public port per
@@ -441,7 +454,9 @@ Accept the lab run only when all of these are true:
 - The playbook exits `0` twice.
 - Host validation from `TEST_PLAN.md` passes.
 - Tenant validation from `TEST_PLAN.md` passes for every tenant.
-- The neighbor test cannot see host or neighbor state.
+- At least two tenants are provisioned.
+- The active-marker neighbor test proves that files, processes, and Docker
+  containers from tenant A are not visible from tenant B, and vice versa.
 - Tenant-to-tenant ping fails.
 - Temporary `nip.io` HTTP ingress reaches the intended tenant.
 - Cleanup removes temporary public ingress.
