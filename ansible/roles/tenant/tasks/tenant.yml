@@ -182,12 +182,42 @@
     tenant_vol_create.rc != 0 and
     'already exists' not in tenant_vol_create.stderr
 
+- name: "Read data volume config :: {{ tenant.name }}"
+  ansible.builtin.command: >
+    incus storage volume show {{ incus_storage_pool }} {{ tenant.name }}-data
+  register: tenant_data_volume_show
+  changed_when: false
+
+- name: "Set data volume facts :: {{ tenant.name }}"
+  ansible.builtin.set_fact:
+    tenant_data_volume_config: "{{ tenant_data_volume_show.stdout | from_yaml }}"
+    tenant_data_snapshots_configured: >-
+      {{
+        (tenant_data_volume_show.stdout | from_yaml).config.get('snapshots.schedule', '') == '@daily'
+        and (tenant_data_volume_show.stdout | from_yaml).config.get('snapshots.expiry', '') == '7d'
+      }}
+    tenant_data_volume_dependent: >-
+      {{
+        (tenant_data_volume_show.stdout | from_yaml).config.get('dependent', 'false') == 'true'
+      }}
+
+- name: "Refuse dependent data volume without snapshot retention :: {{ tenant.name }}"
+  ansible.builtin.fail:
+    msg: >-
+      Data volume {{ tenant.name }}-data is already attached but does not have
+      the expected snapshot schedule/expiry. Detach it or fix its config before
+      continuing.
+  when:
+    - tenant_data_volume_dependent | bool
+    - not tenant_data_snapshots_configured | bool
+
 - name: "Enable daily data volume snapshots :: {{ tenant.name }}"
   ansible.builtin.command: >
     incus storage volume set {{ incus_storage_pool }} {{ tenant.name }}-data
     snapshots.schedule=@daily
     snapshots.expiry=7d
   changed_when: false
+  when: not tenant_data_snapshots_configured | bool
 
 - name: "Attach data volume to container :: {{ tenant.name }}"
   ansible.builtin.command: >
