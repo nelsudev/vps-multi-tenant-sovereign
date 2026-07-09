@@ -55,6 +55,10 @@ existence of another tenant's services — not through `/proc`, not through
 Full writeup with rationale, the isolation test checklist, and command-by-command
 walkthrough: [`GUIDE.md`](./GUIDE.md).
 
+Want to prove the Ansible path on a disposable VPS before wiring real
+Cloudflare Tunnels? Use the Hetzner API + direct `nip.io` lab path in
+[`HETZNER_TEST_GUIDE.md`](./HETZNER_TEST_GUIDE.md).
+
 ## 🤖 Let an agent do it
 
 Have Claude Code, Codex, or OpenCode run the whole setup for you — clone
@@ -94,6 +98,9 @@ run.
   migration, and accidental deletes.
 - ✅ `TEST_PLAN.md` — static checks plus the SSH-backed validation plan for
   applying the role to a VPS and proving host, tenant, and neighbor isolation.
+- 🧪 `HETZNER_TEST_GUIDE.md` — a disposable Hetzner Cloud lab flow: create a
+  VPS with an API token, run the Ansible validation, expose temporary HTTP
+  ingress through `nip.io`, and destroy the server afterwards.
 - 🤖 `.claude/skills/` — Claude Code skills for the two recurring operations:
   `new-tenant` (provision + neighbor test) and `migrate-tenant` (move a
   tenant to another host with near-zero downtime). Each skill documents its

@@ -32,6 +32,7 @@ the shared-kernel caveat). Keep that style.
 | `GUIDE.md` | The design doc: rationale + step-by-step runbook (§00–§09) | the Fable design conversation |
 | `SECURITY.md` | Security & zero-downtime operations | extends GUIDE.md §07 |
 | `FAQ.md` | Troubleshooting real problems, by area | field knowledge + guide edge cases |
+| `HETZNER_TEST_GUIDE.md` | Disposable Hetzner lab validation with direct `nip.io` ingress | TEST_PLAN.md + GUIDE.md, adapted for no-Cloudflare smoke tests |
 | `ansible/` | Automation of GUIDE.md §01–§05 + limits (§08) | the guide, mechanized |
 | `.claude/skills/` | Runbooks for recurring ops (new-tenant, migrate-tenant) | distilled from GUIDE.md/FAQ.md sections named in each skill's origin comment |
 

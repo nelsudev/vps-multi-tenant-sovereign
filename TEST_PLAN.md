@@ -13,10 +13,12 @@ until the preflight checks are clean and you have a rollback path.
 From the repository root:
 
 ```bash
-cd ansible
-ansible-galaxy collection install -r requirements.yml -p collections --upgrade
-ansible-playbook -i inventory.example.ini site.yml --syntax-check
-ansible-lint site.yml
+ansible-galaxy collection install \
+  -r ansible/requirements.yml \
+  -p ansible/collections \
+  --upgrade
+ansible-playbook -i ansible/inventory.example.ini ansible/site.yml --syntax-check
+ansible-lint ansible/site.yml
 yamllint ansible .claude
 bash -n ansible/roles/tenant/templates/bootstrap-app-user.sh.j2
 git diff --check
@@ -168,9 +170,27 @@ systemctl --user enable --now cloudflared
 Expected result: `cloudflared tunnel info tenant-a` reports connected, and the
 hostname routes to the tenant service.
 
+## 8. Hetzner direct-ingress lab path
+
+For a disposable end-to-end test without Cloudflare credentials, use
+`HETZNER_TEST_GUIDE.md`. That guide creates a temporary Hetzner Cloud VPS with
+an API token, runs this test plan through host/tenant/neighbor validation, then
+uses `nip.io` plus temporary public HTTP ingress to prove tenant reachability.
+
+Expected result: the Hetzner lab passes sections 1-6 above, `nip.io` resolves
+to the server's public IPv4, HTTP reaches the intended tenant, and the
+temporary ingress plus server are removed afterwards.
+
+This lab does not replace section 7 for production. It intentionally opens
+inbound ports, so it cannot validate the Cloudflare Tunnel no-inbound property.
+
 ## References
 
 - Incus network ACLs:
   <https://linuxcontainers.org/incus/docs/main/howto/network_acls/>
 - Incus bridge networks:
   <https://linuxcontainers.org/incus/docs/main/reference/network_bridge/>
+- Hetzner Cloud API:
+  <https://docs.hetzner.cloud/reference/cloud>
+- `nip.io` wildcard DNS:
+  <https://nip.io/>
