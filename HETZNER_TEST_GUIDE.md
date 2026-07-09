@@ -62,6 +62,11 @@ test away from production machines.
 
 ## 02 - Create the Hetzner VPS
 
+Cost gate: stop before creating anything and ask the operator to approve the
+exact server type, location, hourly price, and expected maximum test duration.
+Do not create a server from an agent run until the operator replies with an
+explicit approval.
+
 List current images, locations, and server types first. Hetzner changes
 offerings over time, so choose from the live lists instead of trusting an old
 example.
@@ -71,6 +76,48 @@ hcloud image list --type system
 hcloud location list
 hcloud server-type list
 ```
+
+Read live pricing for the cheapest practical lab candidates:
+
+```bash
+hcloud server-type describe cx33 -o json \
+  | jq '.prices[] | select(.location == "fsn1") | {
+      location,
+      hourly_gross: .price_hourly.gross,
+      monthly_gross: .price_monthly.gross
+    }'
+
+hcloud server-type describe cpx32 -o json \
+  | jq '.prices[] | select(.location == "fsn1") | {
+      location,
+      hourly_gross: .price_hourly.gross,
+      monthly_gross: .price_monthly.gross
+    }'
+```
+
+Default to `cx33` for a low-cost lab if it is available in the selected
+location. It has 4 vCPU, 8 GiB RAM, and 80 GiB disk, which is enough for the
+two-tenant isolation test if you reduce the lab ZFS pool size as shown below.
+Use a larger type only if `cx33` is unavailable or the test needs more disk.
+
+Before continuing, say exactly this in the operator chat, with current values
+from `hcloud`:
+
+```text
+I am about to create one Hetzner Cloud server:
+- name: vps-sovereign-test
+- type: cx33
+- location: fsn1
+- image: ubuntu-24.04
+- resources: 4 vCPU, 8 GiB RAM, 80 GiB disk
+- current gross price: EUR <hourly>/hour, capped at EUR <monthly>/month while it exists
+- planned lifetime: <N> hours
+- estimated gross cost if deleted on time: about EUR <hourly * N>
+
+Reply "approve cx33 fsn1 for <N> hours" before I create it.
+```
+
+If approval is not explicit, stop.
 
 Create or reuse an SSH key in Hetzner Cloud:
 
@@ -92,7 +139,7 @@ will make failures harder to interpret.
 ```bash
 export TEST_SERVER_NAME="vps-sovereign-test"
 export TEST_LOCATION="fsn1"
-export TEST_SERVER_TYPE="cx32"
+export TEST_SERVER_TYPE="cx33"
 export TEST_IMAGE="ubuntu-24.04"
 export TEST_SSH_KEY="sovereign-test-key"
 
@@ -145,6 +192,18 @@ the checked-in two-tenant defaults are intentionally conservative:
 If your test server has less than 8 GiB RAM, reduce the tenant memory limits
 before running the playbook. Do not remove `limits.memory` or
 `limits.processes`; the role intentionally refuses tenants without them.
+
+For `cx33`, reduce the lab ZFS pool size before running the playbook because
+the server has an 80 GiB disk and the repository default pool is 100 GiB:
+
+```bash
+cp ansible/group_vars/all.yml /tmp/sovereign-all.yml.backup
+perl -0pi -e 's/incus_zfs_pool_size: 100GiB/incus_zfs_pool_size: 50GiB/' \
+  ansible/group_vars/all.yml
+```
+
+This is a local lab edit only. Revert it before committing docs or role
+changes.
 
 ## 04 - Run local checks
 
@@ -442,6 +501,8 @@ Then clean local untracked state:
 
 ```bash
 rm -f ansible/inventory.ini
+test -f /tmp/sovereign-all.yml.backup && \
+  cp /tmp/sovereign-all.yml.backup ansible/group_vars/all.yml
 unset HCLOUD_TOKEN PUBLIC_IPV4 TEST_SERVER_NAME TEST_LOCATION TEST_SERVER_TYPE TEST_IMAGE TEST_SSH_KEY
 ```
 
