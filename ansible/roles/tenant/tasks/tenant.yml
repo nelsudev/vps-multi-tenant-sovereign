@@ -424,6 +424,7 @@
     docker.io
     fuse-overlayfs
     openssh-server
+    rootlesskit
     slirp4netns
     uidmap
   changed_when: false
