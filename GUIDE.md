@@ -304,8 +304,8 @@ incus config set tenant-a limits.memory=4GiB        # hard RAM cap
 incus config set tenant-a limits.memory.swap=false  # no swap for this tenant
 incus config set tenant-a limits.processes=500      # anti fork-bomb
 
-# enforce quota on the data device
-incus config device set tenant-a data limits.max=20GiB    # disk quota (ZFS)
+# enforce quota on the custom ZFS data volume before attaching it
+incus storage volume set default tenant-a-data size=20GiB
 
 # optional: throttle I/O when the backing device/storage driver supports it
 incus config device set tenant-a data limits.read=50MB limits.write=30MB
@@ -341,8 +341,7 @@ incus list                              # status of every tenant
 incus exec tenant-a -- su - app          # enter a tenant
 incus stop|start|restart tenant-a        # lifecycle
 incus copy tenant-a tenant-d             # clone → new base tenant
-incus config device set tenant-a \
-  data limits.max=20GiB                    # disk quota
+incus storage volume set default tenant-a-data size=20GiB  # disk quota
 incus delete tenant-a --force            # remove (snapshot first!)
 ```
 

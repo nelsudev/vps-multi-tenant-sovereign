@@ -102,7 +102,7 @@ incus config get "$tenant" limits.processes
 incus config device get "$tenant" eth0 network
 incus config device get "$tenant" eth0 security.acls
 incus network acl show "$expected_acl"
-incus config device get "$tenant" data limits.max
+incus storage volume get default "${tenant}-data" size
 incus config device get "$tenant" data limits.read || true
 incus config device get "$tenant" data limits.write || true
 incus storage volume get default "${tenant}-data" snapshots.schedule
@@ -122,7 +122,7 @@ Expected result:
   blocking is enabled.
 - the ACL has egress `reject` rules for `10.0.0.0/8`, `172.16.0.0/12`,
   and `192.168.0.0/16`.
-- data volume `limits.max` matches the tenant disk quota. Disk IO
+- data volume `size` matches the tenant disk quota. Disk IO
   `limits.read/write` are best-effort because current Incus versions can
   reject them on filesystem-backed custom volumes.
 - data volume snapshot schedule is `@daily`.
