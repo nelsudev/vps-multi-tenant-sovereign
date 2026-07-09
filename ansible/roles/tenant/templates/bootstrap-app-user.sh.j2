@@ -48,14 +48,15 @@ else
   rm -f "${desired_daemon_json}"
 fi
 
-if command -v dockerd-rootless-setuptool.sh >/dev/null 2>&1 &&
-  [ ! -f ~/.config/systemd/user/docker.service ]; then
-  dockerd-rootless-setuptool.sh install
-  mark_changed
-fi
-
-desired_docker_service="$(mktemp)"
-cat > "${desired_docker_service}" <<'EOF'
+if command -v dockerd-rootless-setuptool.sh >/dev/null 2>&1; then
+  if [ ! -f ~/.config/systemd/user/docker.service ]; then
+    dockerd-rootless-setuptool.sh install
+    systemctl --user daemon-reload
+    mark_changed
+  fi
+else
+  desired_docker_service="$(mktemp)"
+  cat > "${desired_docker_service}" <<'EOF'
 [Unit]
 Description=Docker Application Container Engine (Rootless)
 Documentation=https://docs.docker.com/go/rootless/
@@ -82,15 +83,16 @@ KillMode=mixed
 WantedBy=default.target
 EOF
 
-if [ ! -f ~/.config/systemd/user/docker.service ] || \
-  ! cmp -s "${desired_docker_service}" ~/.config/systemd/user/docker.service; then
-  mkdir -p ~/.config/systemd/user
-  mv "${desired_docker_service}" ~/.config/systemd/user/docker.service
-  systemctl --user daemon-reload
-  needs_restart=1
-  mark_changed
-else
-  rm -f "${desired_docker_service}"
+  if [ ! -f ~/.config/systemd/user/docker.service ] || \
+    ! cmp -s "${desired_docker_service}" ~/.config/systemd/user/docker.service; then
+    mkdir -p ~/.config/systemd/user
+    mv "${desired_docker_service}" ~/.config/systemd/user/docker.service
+    systemctl --user daemon-reload
+    needs_restart=1
+    mark_changed
+  else
+    rm -f "${desired_docker_service}"
+  fi
 fi
 
 if ! systemctl --user is-enabled docker >/dev/null 2>&1; then

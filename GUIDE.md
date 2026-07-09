@@ -150,7 +150,11 @@ lateral movement boundary.
 incus exec tenant-a -- bash
 # --- now inside the container ---
 apt update && apt -y install uidmap dbus-user-session \
-  docker.io docker-compose-v2 openssh-server curl fuse-overlayfs slirp4netns
+  ca-certificates curl openssh-server fuse-overlayfs slirp4netns
+
+# add Docker's official apt repository, then install:
+apt -y install docker-ce docker-ce-cli docker-ce-rootless-extras \
+  docker-buildx-plugin docker-compose-plugin containerd.io
 
 # keep Docker rootless-only inside the tenant
 systemctl disable --now docker.service docker.socket

@@ -26,10 +26,9 @@ The most common nested-Docker problem. Check in this order:
 
 ### `dockerd-rootless-setuptool.sh: command not found`
 
-You installed `docker.io` but not the rootless extras, or you're on the
-Docker CE packages. Either `apt install docker.io uidmap dbus-user-session`
-(Ubuntu packaging includes the script) or, with Docker CE,
-`apt install docker-ce-rootless-extras`.
+Install Docker from Docker's official apt repository and include
+`docker-ce-rootless-extras`. Ubuntu's `docker.io` package may not include the
+rootless setup helper and has shown rootless daemon crashes in this lab.
 
 ### `systemctl --user` fails with "Failed to connect to bus"
 
