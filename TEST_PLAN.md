@@ -72,6 +72,7 @@ incus network get incusbr0 ipv6.address
 incus profile device get default root pool
 incus profile device get default eth0 network
 ufw status verbose
+ufw status numbered
 systemctl is-enabled unattended-upgrades
 sysctl kernel.unprivileged_bpf_disabled kernel.kptr_restrict kernel.dmesg_restrict net.ipv4.conf.all.rp_filter
 ```
@@ -83,6 +84,8 @@ Expected result:
 - The default profile root pool is `default`.
 - The default profile `eth0` network is `incusbr0`.
 - UFW is active with incoming denied and outgoing allowed.
+- UFW has routed allow rules for each tenant bridge, while tenant ACLs still
+  reject private lateral egress.
 - unattended-upgrades is enabled.
 - sysctl values are `1`, `2`, `1`, and `1`.
 

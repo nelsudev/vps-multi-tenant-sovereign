@@ -67,6 +67,13 @@
     - incus_tenant_network_mode == "dedicated_bridge"
     - tenant_network_check.rc != 0
 
+- name: "Allow routed egress from tenant bridge through UFW :: {{ tenant.name }}"
+  community.general.ufw:
+    rule: allow
+    route: true
+    interface_in: "{{ tenant_network_name }}"
+  when: incus_tenant_network_mode == "dedicated_bridge"
+
 - name: "Check tenant private egress ACL :: {{ tenant.name }}"
   ansible.builtin.command: "incus network acl show {{ tenant_private_egress_acl_name }}"
   register: tenant_private_egress_acl_show

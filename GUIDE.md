@@ -104,6 +104,7 @@ incus config device add tenant-a data disk \
 # strongest tenant network isolation: one NAT bridge per tenant
 incus network create net-tenant-a ipv4.address=10.201.1.1/24 \
   ipv4.nat=true ipv6.address=none
+ufw route allow in on net-tenant-a
 incus config device override tenant-a eth0 network=net-tenant-a
 incus exec tenant-a -- sh -c 'cat > /etc/netplan/10-lxc.yaml <<EOF
 network:
@@ -135,7 +136,9 @@ limits and static IPv4. Each one is born with its own view: its own PID 1, its
 own `/proc`, and, in the Ansible defaults, its own NAT bridge plus an ACL
 rejecting private egress ranges used for lateral tenant traffic. DNS points to
 public resolvers so package installs can resolve public mirrors without
-allowing access to neighboring private networks.
+allowing access to neighboring private networks. UFW must allow routed egress
+from the tenant bridge; the per-tenant Incus ACL remains the private-network
+lateral movement boundary.
 
 > **The limit people forget most**: without `limits.memory` / `limits.cpu`, a
 > tenant can consume all the RAM and OOM-crash its neighbors — visibility
