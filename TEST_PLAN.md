@@ -181,13 +181,15 @@ tenant A's active markers:
 ```bash
 incus exec "$tenant_a" -- su - app -c 'test -f /data/tenant-a-proof.txt'
 incus exec "$tenant_a" -- su - app -c 'test ! -f /data/tenant-b-proof.txt'
-incus exec "$tenant_a" -- su - app -c '! ps aux | grep -F "[t]enant-b-process-marker"'
+incus exec "$tenant_a" -- su - app -c 'ps -eo args | awk "$1 == \"tenant-a-process-marker\" { found = 1 } END { exit found ? 0 : 1 }"'
+incus exec "$tenant_a" -- su - app -c '! ps -eo args | awk "$1 == \"tenant-b-process-marker\" { found = 1 } END { exit found ? 0 : 1 }"'
 incus exec "$tenant_a" -- su - app -c 'export DOCKER_HOST=unix:///run/user/$(id -u)/docker.sock; docker ps --format "{{.Names}}" | grep -Fx tenant-a-docker-marker'
 incus exec "$tenant_a" -- su - app -c 'export DOCKER_HOST=unix:///run/user/$(id -u)/docker.sock; ! docker ps --format "{{.Names}}" | grep -Fx tenant-b-docker-marker'
 
 incus exec "$tenant_b" -- su - app -c 'test -f /data/tenant-b-proof.txt'
 incus exec "$tenant_b" -- su - app -c 'test ! -f /data/tenant-a-proof.txt'
-incus exec "$tenant_b" -- su - app -c '! ps aux | grep -F "[t]enant-a-process-marker"'
+incus exec "$tenant_b" -- su - app -c 'ps -eo args | awk "$1 == \"tenant-b-process-marker\" { found = 1 } END { exit found ? 0 : 1 }"'
+incus exec "$tenant_b" -- su - app -c '! ps -eo args | awk "$1 == \"tenant-a-process-marker\" { found = 1 } END { exit found ? 0 : 1 }"'
 incus exec "$tenant_b" -- su - app -c 'export DOCKER_HOST=unix:///run/user/$(id -u)/docker.sock; docker ps --format "{{.Names}}" | grep -Fx tenant-b-docker-marker'
 incus exec "$tenant_b" -- su - app -c 'export DOCKER_HOST=unix:///run/user/$(id -u)/docker.sock; ! docker ps --format "{{.Names}}" | grep -Fx tenant-a-docker-marker'
 ```
