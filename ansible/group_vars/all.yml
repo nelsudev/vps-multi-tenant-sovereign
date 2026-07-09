@@ -36,6 +36,7 @@ tenants:
     network:
       bridge: net-tenant-a
       bridge_ipv4: 10.201.1.1/24
+      ipv4: 10.201.1.10/24
       ingress: 100Mbit
       egress: 100Mbit
       deny_private_egress: true
@@ -53,6 +54,7 @@ tenants:
     network:
       bridge: net-tenant-b
       bridge_ipv4: 10.201.2.1/24
+      ipv4: 10.201.2.10/24
       ingress: 100Mbit
       egress: 100Mbit
       deny_private_egress: true

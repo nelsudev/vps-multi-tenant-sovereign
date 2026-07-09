@@ -22,9 +22,10 @@
     that:
       - tenant.network.bridge is defined
       - tenant.network.bridge_ipv4 is defined
+      - tenant.network.ipv4 is defined
     fail_msg: >-
-      Tenant {{ tenant.name }} needs network.bridge and network.bridge_ipv4
-      when incus_tenant_network_mode is dedicated_bridge.
+      Tenant {{ tenant.name }} needs network.bridge, network.bridge_ipv4, and
+      network.ipv4 when incus_tenant_network_mode is dedicated_bridge.
   when: incus_tenant_network_mode == "dedicated_bridge"
 
 - name: "Set tenant network facts :: {{ tenant.name }}"
@@ -348,6 +349,26 @@
       {{ tenant_network_acl_effective.stdout | default('<unset>') }},
       expected {{ tenant_private_egress_acl_name }}.
   when: tenant.network.deny_private_egress | default(true) | bool
+
+- name: "Render tenant static netplan :: {{ tenant.name }}"
+  ansible.builtin.template:
+    src: netplan-static.yaml.j2
+    dest: "/tmp/{{ tenant.name }}-10-lxc.yaml"
+    mode: "0600"
+  when: tenant.network.ipv4 is defined
+
+- name: "Install tenant static netplan :: {{ tenant.name }}"
+  ansible.builtin.command: >
+    incus file push /tmp/{{ tenant.name }}-10-lxc.yaml
+    {{ tenant.name }}/etc/netplan/10-lxc.yaml --mode 0600
+  changed_when: false
+  when: tenant.network.ipv4 is defined
+
+- name: "Remove local tenant static netplan :: {{ tenant.name }}"
+  ansible.builtin.file:
+    path: "/tmp/{{ tenant.name }}-10-lxc.yaml"
+    state: absent
+  when: tenant.network.ipv4 is defined
 
 - name: "Restart tenant after network configuration :: {{ tenant.name }}"
   ansible.builtin.command: "incus restart {{ tenant.name }}"

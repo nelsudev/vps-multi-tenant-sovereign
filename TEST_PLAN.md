@@ -101,6 +101,8 @@ incus config get "$tenant" limits.memory
 incus config get "$tenant" limits.processes
 incus config device get "$tenant" eth0 network
 incus config device get "$tenant" eth0 security.acls
+incus exec "$tenant" -- ip -4 -o addr show eth0
+incus exec "$tenant" -- resolvectl dns
 incus network acl show "$expected_acl"
 incus storage volume get default "${tenant}-data" size
 incus config device get "$tenant" data limits.read || true
@@ -118,6 +120,8 @@ Expected result:
 - `security.privileged` is empty or `false`.
 - memory and process limits are set.
 - `eth0 network` matches the tenant bridge.
+- `eth0` has the static IPv4 configured for the tenant.
+- resolver DNS points at the tenant bridge gateway.
 - `eth0 security.acls` matches `<tenant>-deny-private` when private egress
   blocking is enabled.
 - the ACL has egress `reject` rules for `10.0.0.0/8`, `172.16.0.0/12`,
