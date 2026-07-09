@@ -304,9 +304,11 @@ incus config set tenant-a limits.memory=4GiB        # hard RAM cap
 incus config set tenant-a limits.memory.swap=false  # no swap for this tenant
 incus config set tenant-a limits.processes=500      # anti fork-bomb
 
-# throttle I/O on the data device
-incus config device set tenant-a data limits.read=50MB limits.write=30MB
+# enforce quota on the data device
 incus config device set tenant-a data limits.max=20GiB    # disk quota (ZFS)
+
+# optional: throttle I/O when the backing device/storage driver supports it
+incus config device set tenant-a data limits.read=50MB limits.write=30MB
 
 # network bandwidth
 incus config device set tenant-a eth0 limits.ingress=100Mbit limits.egress=100Mbit
@@ -318,7 +320,7 @@ incus config device set tenant-a eth0 limits.ingress=100Mbit limits.egress=100Mb
 | `limits.cpu.allowance`           | Sees all cores, only consumes X%              | Occasional bursting without a fixed core count   |
 | `limits.memory`                  | Hard RAM cap; local OOM when exceeded          | Always — never leave this unset                  |
 | `limits.processes`               | PID ceiling in the container                  | Always — cheap, prevents fork-bombs              |
-| device `limits.read/write`       | Throttles disk IOPS/throughput                | A neighbor saturating shared storage             |
+| device `limits.read/write`       | Best-effort disk IOPS/throughput throttling   | When the Incus device/storage driver supports it |
 | device `limits.ingress/egress`   | Throttles network bandwidth                   | A tenant with heavy traffic affecting others      |
 
 **Rule of thumb**: `limits.memory` is the one you can never forget — without

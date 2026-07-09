@@ -199,13 +199,28 @@
     tenant_dev_add.rc != 0 and
     'already exists' not in tenant_dev_add.stderr
 
-- name: "Set disk quota and IO limits :: {{ tenant.name }}"
+- name: "Set disk quota :: {{ tenant.name }}"
   ansible.builtin.command: >
     incus config device set {{ tenant.name }} data
     limits.max={{ tenant.disk.size }}
+  changed_when: false
+
+- name: "Try to set disk IO limits :: {{ tenant.name }}"
+  ansible.builtin.command: >
+    incus config device set {{ tenant.name }} data
     limits.read={{ tenant.disk.read }}
     limits.write={{ tenant.disk.write }}
+  register: tenant_disk_io_limits
   changed_when: false
+  failed_when: false
+
+- name: "Record unsupported disk IO limits :: {{ tenant.name }}"
+  ansible.builtin.debug:
+    msg: >-
+      Incus did not accept disk IO limits on tenant {{ tenant.name }} data
+      volume: {{ tenant_disk_io_limits.stderr }}. Disk quota remains enforced
+      with limits.max={{ tenant.disk.size }}.
+  when: tenant_disk_io_limits.rc != 0
 
 - name: "Override tenant network device :: {{ tenant.name }}"
   ansible.builtin.command: >

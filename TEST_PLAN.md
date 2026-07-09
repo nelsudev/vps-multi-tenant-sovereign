@@ -103,6 +103,8 @@ incus config device get "$tenant" eth0 network
 incus config device get "$tenant" eth0 security.acls
 incus network acl show "$expected_acl"
 incus config device get "$tenant" data limits.max
+incus config device get "$tenant" data limits.read || true
+incus config device get "$tenant" data limits.write || true
 incus storage volume get default "${tenant}-data" snapshots.schedule
 incus exec "$tenant" -- cloudflared --version
 incus exec "$tenant" -- systemctl is-active ssh
@@ -120,6 +122,9 @@ Expected result:
   blocking is enabled.
 - the ACL has egress `reject` rules for `10.0.0.0/8`, `172.16.0.0/12`,
   and `192.168.0.0/16`.
+- data volume `limits.max` matches the tenant disk quota. Disk IO
+  `limits.read/write` are best-effort because current Incus versions can
+  reject them on filesystem-backed custom volumes.
 - data volume snapshot schedule is `@daily`.
 - `cloudflared` is installed.
 - tenant `sshd` is active.
@@ -208,7 +213,8 @@ A deployment is done only when all of these checks pass:
 - Every tenant has mandatory CPU, memory, process, disk, and network limits.
 - Every tenant is unprivileged and has nesting enabled.
 - Every tenant has its own network bridge and expected private-egress ACL.
-- Every tenant has its own ZFS-backed data volume and daily snapshot schedule.
+- Every tenant has its own ZFS-backed data volume, enforced disk quota, and
+  daily snapshot schedule.
 - The `app` user exists inside each tenant and rootless Docker reports
   `/data/docker`.
 - Tenant A's `/data` marker file is visible from tenant A and not visible from
