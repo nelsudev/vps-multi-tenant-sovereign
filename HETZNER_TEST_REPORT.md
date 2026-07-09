@@ -9,6 +9,12 @@ Branch tested: `agent/hetzner-test-guide`
 This was a disposable Hetzner Cloud lab run to validate the repository on a
 real KVM VPS without Cloudflare Tunnels.
 
+This report separates:
+
+- findings observed during the live Hetzner run;
+- review findings fixed after the live run;
+- checks that were validated only locally after the review fixes.
+
 Approved resources:
 
 - Provider: Hetzner Cloud
@@ -28,9 +34,9 @@ Actual cleanup result:
 
 ## Validation result
 
-Overall result: passed after fixes applied during the lab.
+Overall live-lab result: passed after fixes applied during the Hetzner run.
 
-Validated:
+Validated on the live Hetzner VPS:
 
 - Local static checks passed.
 - Ansible preflight reached the VPS over SSH.
@@ -44,6 +50,23 @@ Validated:
 - Direct public ingress was smoke-tested with `nip.io` and temporary ports.
 - Temporary test artifacts were removed.
 - The server was destroyed after validation.
+
+Validated locally after PR review:
+
+- Ansible syntax check.
+- `ansible-lint`.
+- `yamllint ansible .claude`.
+- Shell syntax check for the tenant bootstrap template.
+- `git diff --check`.
+
+Not re-tested on Hetzner after PR review:
+
+- The new conditional tenant restart behavior.
+- The new UFW routed reject rules between peer tenant bridge subnets.
+- The removal of the gateway DNS ACL allow rule.
+
+Those three changes are code-reviewed and locally validated, but they are not
+claimed as live-lab validated in this report.
 
 ## Isolation evidence
 
@@ -97,7 +120,7 @@ Result: passed.
 
 Result: passed.
 
-## Failures found and fixed
+## Failures found and fixed during the live run
 
 These failures happened during the real Hetzner run and were fixed on the
 branch.
@@ -209,61 +232,6 @@ Related commit:
 
 - `968ba7d fix(ansible): allow routed tenant bridge egress`
 
-### Routed UFW allow lacked defense in depth
-
-Failure:
-
-- The host UFW routed allow rule permitted egress from each tenant bridge
-  broadly.
-- Tenant-to-tenant isolation still depended on Incus ACL private-CIDR rejects,
-  but UFW did not add a secondary block between tenant bridge subnets.
-
-Fix:
-
-- UFW now adds routed reject rules from each tenant bridge to peer tenant bridge
-  subnets before the broad routed allow.
-- Incus ACLs remain the primary tenant egress isolation control.
-
-Related commit:
-
-- `fix(ansible): avoid unnecessary tenant restarts`
-
-### Static netplan restart was not truly idempotent
-
-Failure:
-
-- The tenant restart after static network configuration ran every playbook run.
-- The task used `changed_when: false`, which hid the service interruption and
-  made the second-run idempotency claim misleading.
-
-Fix:
-
-- The role now compares the rendered netplan content against the file inside
-  the tenant.
-- The netplan file is pushed only when the content differs.
-- The tenant is restarted only when the netplan file changed.
-
-Related commit:
-
-- `fix(ansible): avoid unnecessary tenant restarts`
-
-### Gateway DNS ACL was confusing
-
-Failure:
-
-- The tenant ACL allowed DNS to the tenant bridge gateway, while the netplan
-  configuration used public resolvers.
-- The rule was harmless in the lab but misleading for maintainers.
-
-Fix:
-
-- The gateway DNS allow rule was removed.
-- DNS expectations now refer to the configured public resolvers.
-
-Related commit:
-
-- `fix(ansible): avoid unnecessary tenant restarts`
-
 ### Interrupted package configuration broke a rerun
 
 Failure:
@@ -313,6 +281,82 @@ Related commit:
 
 - `ddd1cd8 fix(test): avoid process marker grep self-match`
 
+## PR review findings fixed after the live run
+
+These findings were raised after the Hetzner server had already been destroyed.
+They were fixed in code and validated locally, but not re-run end-to-end on a
+new Hetzner VPS.
+
+### Routed UFW allow lacked defense in depth
+
+Finding:
+
+- The host UFW routed allow rule permitted egress from each tenant bridge
+  broadly.
+- Tenant-to-tenant isolation still depended on Incus ACL private-CIDR rejects,
+  but UFW did not add a secondary block between tenant bridge subnets.
+
+Fix:
+
+- UFW now adds routed reject rules from each tenant bridge to peer tenant bridge
+  subnets before the broad routed allow.
+- Incus ACLs remain the primary tenant egress isolation control.
+
+Validation:
+
+- Local Ansible syntax and lint checks passed.
+- Not re-tested on a live Hetzner VPS.
+
+Related commit:
+
+- `85fc37d fix(ansible): avoid unnecessary tenant restarts`
+
+### Static netplan restart was not truly idempotent
+
+Finding:
+
+- The tenant restart after static network configuration ran every playbook run.
+- The task used `changed_when: false`, which hid the service interruption and
+  made the second-run idempotency claim misleading.
+
+Fix:
+
+- The role now compares the rendered netplan content against the file inside
+  the tenant.
+- The netplan file is pushed only when the content differs.
+- The tenant is restarted only when the netplan file changed.
+
+Validation:
+
+- Local Ansible syntax and lint checks passed.
+- Not re-tested on a live Hetzner VPS.
+
+Related commit:
+
+- `85fc37d fix(ansible): avoid unnecessary tenant restarts`
+
+### Gateway DNS ACL was confusing
+
+Finding:
+
+- The tenant ACL allowed DNS to the tenant bridge gateway, while the netplan
+  configuration used public resolvers.
+- The rule was harmless in the lab but misleading for maintainers.
+
+Fix:
+
+- The gateway DNS allow rule was removed.
+- DNS expectations now refer to the configured public resolvers.
+
+Validation:
+
+- Local Ansible syntax and lint checks passed.
+- Not re-tested on a live Hetzner VPS.
+
+Related commit:
+
+- `85fc37d fix(ansible): avoid unnecessary tenant restarts`
+
 ## Remaining limitations
 
 This lab did not validate:
@@ -320,6 +364,8 @@ This lab did not validate:
 - Cloudflare Tunnel login, routing, reconnect behavior, or Access policies.
 - The production zero-public-inbound-port property.
 - HTTPS certificates for real customer domains.
+- The post-review UFW reject and conditional restart fixes on a fresh Hetzner
+  VPS.
 - Long-running resource pressure over days or weeks.
 - Backup restore drills.
 - Kernel/container escape resistance beyond the configured Incus, UFW, sysctl,
@@ -343,4 +389,5 @@ Done:
 Not done in this lab:
 
 - Cloudflare Tunnel production ingress validation.
+- Post-review fixes re-run on a new Hetzner VPS.
 - Restore-from-backup validation.
