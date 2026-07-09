@@ -22,9 +22,10 @@
     that:
       - tenant.network.bridge is defined
       - tenant.network.bridge_ipv4 is defined
+      - tenant.network.ipv4 is defined
     fail_msg: >-
-      Tenant {{ tenant.name }} needs network.bridge and network.bridge_ipv4
-      when incus_tenant_network_mode is dedicated_bridge.
+      Tenant {{ tenant.name }} needs network.bridge, network.bridge_ipv4, and
+      network.ipv4 when incus_tenant_network_mode is dedicated_bridge.
   when: incus_tenant_network_mode == "dedicated_bridge"
 
 - name: "Set tenant network facts :: {{ tenant.name }}"
@@ -35,6 +36,7 @@
         if incus_tenant_network_mode == 'dedicated_bridge'
         else incus_network
       }}
+    tenant_network_gateway_ipv4: "{{ tenant.network.bridge_ipv4 | regex_replace('/.*$', '') }}"
     tenant_private_egress_acl_name: "{{ tenant.name }}-deny-private"
 
 - name: "Validate tenant private egress ACL name :: {{ tenant.name }}"
@@ -64,6 +66,29 @@
   when:
     - incus_tenant_network_mode == "dedicated_bridge"
     - tenant_network_check.rc != 0
+
+- name: "Allow routed egress from tenant bridge through UFW :: {{ tenant.name }}"
+  community.general.ufw:
+    rule: allow
+    route: true
+    interface_in: "{{ tenant_network_name }}"
+  when: incus_tenant_network_mode == "dedicated_bridge"
+
+- name: "Reject routed egress to peer tenant bridges through UFW :: {{ tenant.name }}"
+  community.general.ufw:
+    rule: reject
+    route: true
+    interface_in: "{{ tenant_network_name }}"
+    to_ip: "{{ item.network.bridge_ipv4 }}"
+    insert: 1
+    insert_relative_to: first-ipv4
+  loop: "{{ tenants | rejectattr('name', 'equalto', tenant.name) | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - incus_tenant_network_mode == "dedicated_bridge"
+    - tenant.network.deny_private_egress | default(true) | bool
+    - item.network.bridge_ipv4 is defined
 
 - name: "Check tenant private egress ACL :: {{ tenant.name }}"
   ansible.builtin.command: "incus network acl show {{ tenant_private_egress_acl_name }}"
@@ -182,12 +207,53 @@
     tenant_vol_create.rc != 0 and
     'already exists' not in tenant_vol_create.stderr
 
+- name: "Read data volume config :: {{ tenant.name }}"
+  ansible.builtin.command: >
+    incus storage volume show {{ incus_storage_pool }} {{ tenant.name }}-data
+  register: tenant_data_volume_show
+  changed_when: false
+
+- name: "Set data volume facts :: {{ tenant.name }}"
+  ansible.builtin.set_fact:
+    tenant_data_volume_config: "{{ tenant_data_volume_show.stdout | from_yaml }}"
+    tenant_data_size_configured: >-
+      {{
+        (tenant_data_volume_show.stdout | from_yaml).config.get('size', '') == tenant.disk.size
+      }}
+    tenant_data_snapshots_configured: >-
+      {{
+        (tenant_data_volume_show.stdout | from_yaml).config.get('snapshots.schedule', '') == '@daily'
+        and (tenant_data_volume_show.stdout | from_yaml).config.get('snapshots.expiry', '') == '7d'
+      }}
+    tenant_data_volume_dependent: >-
+      {{
+        (tenant_data_volume_show.stdout | from_yaml).config.get('dependent', 'false') == 'true'
+      }}
+
+- name: "Refuse dependent data volume without expected config :: {{ tenant.name }}"
+  ansible.builtin.fail:
+    msg: >-
+      Data volume {{ tenant.name }}-data is already attached but does not have
+      the expected size and snapshot schedule/expiry. Detach it or fix its
+      config before continuing.
+  when:
+    - tenant_data_volume_dependent | bool
+    - not (tenant_data_size_configured | bool and tenant_data_snapshots_configured | bool)
+
+- name: "Set data volume quota :: {{ tenant.name }}"
+  ansible.builtin.command: >
+    incus storage volume set {{ incus_storage_pool }} {{ tenant.name }}-data
+    size={{ tenant.disk.size }}
+  changed_when: false
+  when: not tenant_data_size_configured | bool
+
 - name: "Enable daily data volume snapshots :: {{ tenant.name }}"
   ansible.builtin.command: >
     incus storage volume set {{ incus_storage_pool }} {{ tenant.name }}-data
     snapshots.schedule=@daily
     snapshots.expiry=7d
   changed_when: false
+  when: not tenant_data_snapshots_configured | bool
 
 - name: "Attach data volume to container :: {{ tenant.name }}"
   ansible.builtin.command: >
@@ -199,13 +265,22 @@
     tenant_dev_add.rc != 0 and
     'already exists' not in tenant_dev_add.stderr
 
-- name: "Set disk quota and IO limits :: {{ tenant.name }}"
+- name: "Try to set disk IO limits :: {{ tenant.name }}"
   ansible.builtin.command: >
     incus config device set {{ tenant.name }} data
-    limits.max={{ tenant.disk.size }}
     limits.read={{ tenant.disk.read }}
     limits.write={{ tenant.disk.write }}
+  register: tenant_disk_io_limits
   changed_when: false
+  failed_when: false
+
+- name: "Record unsupported disk IO limits :: {{ tenant.name }}"
+  ansible.builtin.debug:
+    msg: >-
+      Incus did not accept disk IO limits on tenant {{ tenant.name }} data
+      volume: {{ tenant_disk_io_limits.stderr }}. Disk quota remains enforced
+      with storage volume size={{ tenant.disk.size }}.
+  when: tenant_disk_io_limits.rc != 0
 
 - name: "Override tenant network device :: {{ tenant.name }}"
   ansible.builtin.command: >
@@ -267,6 +342,60 @@
       expected {{ tenant_private_egress_acl_name }}.
   when: tenant.network.deny_private_egress | default(true) | bool
 
+- name: "Render tenant static netplan :: {{ tenant.name }}"
+  ansible.builtin.template:
+    src: netplan-static.yaml.j2
+    dest: "/tmp/{{ tenant.name }}-10-lxc.yaml"
+    mode: "0600"
+  when: tenant.network.ipv4 is defined
+
+- name: "Check current tenant static netplan :: {{ tenant.name }}"
+  ansible.builtin.command: >
+    incus exec {{ tenant.name }} --
+    cmp -s /etc/netplan/10-lxc.yaml -
+  args:
+    stdin: "{{ lookup('ansible.builtin.file', '/tmp/' ~ tenant.name ~ '-10-lxc.yaml') }}"
+  register: tenant_static_netplan_compare
+  changed_when: false
+  failed_when: false
+  when: tenant.network.ipv4 is defined
+
+- name: "Install tenant static netplan :: {{ tenant.name }}"
+  ansible.builtin.command: >
+    incus file push /tmp/{{ tenant.name }}-10-lxc.yaml
+    {{ tenant.name }}/etc/netplan/10-lxc.yaml --mode 0600
+  register: tenant_static_netplan_push
+  changed_when: true
+  when:
+    - tenant.network.ipv4 is defined
+    - tenant_static_netplan_compare.rc != 0
+
+- name: "Remove local tenant static netplan :: {{ tenant.name }}"
+  ansible.builtin.file:
+    path: "/tmp/{{ tenant.name }}-10-lxc.yaml"
+    state: absent
+  when: tenant.network.ipv4 is defined
+
+- name: "Restart tenant after network configuration :: {{ tenant.name }}"
+  ansible.builtin.command: "incus restart {{ tenant.name }}"
+  changed_when: true
+  when:
+    - tenant.network.ipv4 is defined
+    - tenant_static_netplan_push is changed
+
+- name: "Wait for tenant IPv4 after network configuration :: {{ tenant.name }}"
+  ansible.builtin.shell: >
+    set -o pipefail &&
+    incus list {{ tenant.name }} -c 4 --format csv |
+    grep -Eq '([0-9]{1,3}\.){3}[0-9]{1,3}'
+  args:
+    executable: /bin/bash
+  changed_when: false
+  register: tenant_ipv4_wait
+  retries: 12
+  delay: 5
+  until: tenant_ipv4_wait.rc == 0
+
 - name: "Enable daily container snapshots :: {{ tenant.name }}"
   ansible.builtin.command: >
     incus config set {{ tenant.name }}
@@ -280,19 +409,61 @@
     apt-get update
   changed_when: false
 
-- name: "Install tenant runtime packages :: {{ tenant.name }}"
+- name: "Repair interrupted package configuration inside container :: {{ tenant.name }}"
+  ansible.builtin.command: >
+    incus exec {{ tenant.name }} --
+    dpkg --configure -a
+  changed_when: false
+
+- name: "Install tenant base runtime packages :: {{ tenant.name }}"
   ansible.builtin.command: >
     incus exec {{ tenant.name }} --
     apt-get install -y
     ca-certificates
     curl
     dbus-user-session
-    docker-compose-v2
-    docker.io
     fuse-overlayfs
     openssh-server
     slirp4netns
     uidmap
+  changed_when: false
+
+- name: "Remove conflicting distro Docker packages :: {{ tenant.name }}"
+  ansible.builtin.command: >
+    incus exec {{ tenant.name }} --
+    sh -c "apt-get remove -y docker.io docker-compose docker-compose-v2 docker-doc
+    podman-docker containerd runc || true"
+  changed_when: false
+
+- name: "Install Docker apt key :: {{ tenant.name }}"
+  ansible.builtin.command: >
+    incus exec {{ tenant.name }} --
+    sh -c "install -m 0755 -d /etc/apt/keyrings &&
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg
+    -o /etc/apt/keyrings/docker.asc &&
+    chmod a+r /etc/apt/keyrings/docker.asc"
+  changed_when: false
+
+- name: "Configure Docker apt repository :: {{ tenant.name }}"
+  ansible.builtin.command: >
+    incus exec {{ tenant.name }} --
+    sh -c ". /etc/os-release &&
+    docker_repo='https://download.docker.com/linux/ubuntu' &&
+    printf '%s\n'
+    \"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] ${docker_repo} ${VERSION_CODENAME} stable\"
+    > /etc/apt/sources.list.d/docker.list"
+  changed_when: false
+
+- name: "Install Docker Engine with rootless extras :: {{ tenant.name }}"
+  ansible.builtin.command: >
+    incus exec {{ tenant.name }} --
+    sh -c "apt-get update && apt-get install -y
+    containerd.io
+    docker-buildx-plugin
+    docker-ce
+    docker-ce-cli
+    docker-ce-rootless-extras
+    docker-compose-plugin"
   changed_when: false
 
 - name: "Ensure Cloudflare apt keyring directory exists :: {{ tenant.name }}"

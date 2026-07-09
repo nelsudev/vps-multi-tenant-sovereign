@@ -104,8 +104,26 @@ incus config device add tenant-a data disk \
 # strongest tenant network isolation: one NAT bridge per tenant
 incus network create net-tenant-a ipv4.address=10.201.1.1/24 \
   ipv4.nat=true ipv6.address=none
+ufw route allow in on net-tenant-a
 incus config device override tenant-a eth0 network=net-tenant-a
+incus exec tenant-a -- sh -c 'cat > /etc/netplan/10-lxc.yaml <<EOF
+network:
+  version: 2
+  ethernets:
+    eth0:
+      addresses: [10.201.1.10/24]
+      routes:
+        - to: default
+          via: 10.201.1.1
+      nameservers:
+        addresses: [1.1.1.1, 9.9.9.9]
+EOF
+netplan apply'
 incus network acl create tenant-a-deny-private
+incus network acl rule add tenant-a-deny-private egress action=allow \
+  destination=10.201.1.1/32 protocol=udp destination_port=53
+incus network acl rule add tenant-a-deny-private egress action=allow \
+  destination=10.201.1.1/32 protocol=tcp destination_port=53
 incus network acl rule add tenant-a-deny-private egress action=reject \
   destination=10.0.0.0/8
 incus config device set tenant-a eth0 security.acls=tenant-a-deny-private \
@@ -114,9 +132,13 @@ incus config device set tenant-a eth0 security.acls=tenant-a-deny-private \
 ```
 
 Repeat per tenant (`tenant-b`, `tenant-c`…), changing only the name and the
-limits. Each one is born with its own view: its own PID 1, its own `/proc`,
-and, in the Ansible defaults, its own NAT bridge plus an ACL rejecting private
-egress ranges used for lateral tenant traffic.
+limits and static IPv4. Each one is born with its own view: its own PID 1, its
+own `/proc`, and, in the Ansible defaults, its own NAT bridge plus an ACL
+rejecting private egress ranges used for lateral tenant traffic. DNS points to
+public resolvers so package installs can resolve public mirrors without
+allowing access to neighboring private networks. UFW must allow routed egress
+from the tenant bridge; the per-tenant Incus ACL remains the private-network
+lateral movement boundary.
 
 > **The limit people forget most**: without `limits.memory` / `limits.cpu`, a
 > tenant can consume all the RAM and OOM-crash its neighbors — visibility
@@ -128,7 +150,11 @@ egress ranges used for lateral tenant traffic.
 incus exec tenant-a -- bash
 # --- now inside the container ---
 apt update && apt -y install uidmap dbus-user-session \
-  docker.io docker-compose-v2 openssh-server curl fuse-overlayfs slirp4netns
+  ca-certificates curl openssh-server fuse-overlayfs slirp4netns
+
+# add Docker's official apt repository, then install:
+apt -y install docker-ce docker-ce-cli docker-ce-rootless-extras \
+  docker-buildx-plugin docker-compose-plugin containerd.io
 
 # keep Docker rootless-only inside the tenant
 systemctl disable --now docker.service docker.socket
@@ -304,9 +330,11 @@ incus config set tenant-a limits.memory=4GiB        # hard RAM cap
 incus config set tenant-a limits.memory.swap=false  # no swap for this tenant
 incus config set tenant-a limits.processes=500      # anti fork-bomb
 
-# throttle I/O on the data device
+# enforce quota on the custom ZFS data volume before attaching it
+incus storage volume set default tenant-a-data size=20GiB
+
+# optional: throttle I/O when the backing device/storage driver supports it
 incus config device set tenant-a data limits.read=50MB limits.write=30MB
-incus config device set tenant-a data limits.max=20GiB    # disk quota (ZFS)
 
 # network bandwidth
 incus config device set tenant-a eth0 limits.ingress=100Mbit limits.egress=100Mbit
@@ -318,7 +346,7 @@ incus config device set tenant-a eth0 limits.ingress=100Mbit limits.egress=100Mb
 | `limits.cpu.allowance`           | Sees all cores, only consumes X%              | Occasional bursting without a fixed core count   |
 | `limits.memory`                  | Hard RAM cap; local OOM when exceeded          | Always — never leave this unset                  |
 | `limits.processes`               | PID ceiling in the container                  | Always — cheap, prevents fork-bombs              |
-| device `limits.read/write`       | Throttles disk IOPS/throughput                | A neighbor saturating shared storage             |
+| device `limits.read/write`       | Best-effort disk IOPS/throughput throttling   | When the Incus device/storage driver supports it |
 | device `limits.ingress/egress`   | Throttles network bandwidth                   | A tenant with heavy traffic affecting others      |
 
 **Rule of thumb**: `limits.memory` is the one you can never forget — without
@@ -339,8 +367,7 @@ incus list                              # status of every tenant
 incus exec tenant-a -- su - app          # enter a tenant
 incus stop|start|restart tenant-a        # lifecycle
 incus copy tenant-a tenant-d             # clone → new base tenant
-incus config device set tenant-a \
-  data limits.max=20GiB                    # disk quota
+incus storage volume set default tenant-a-data size=20GiB  # disk quota
 incus delete tenant-a --force            # remove (snapshot first!)
 ```
 

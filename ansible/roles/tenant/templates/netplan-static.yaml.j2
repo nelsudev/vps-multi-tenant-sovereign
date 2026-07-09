@@ -1,0 +1,14 @@
+network:
+  version: 2
+  ethernets:
+    eth0:
+      addresses:
+        - {{ tenant.network.ipv4 }}
+      routes:
+        - to: default
+          via: {{ tenant_network_gateway_ipv4 }}
+      nameservers:
+        addresses:
+{% for dns_server in tenant.network.dns_servers | default(incus_tenant_dns_servers) %}
+          - {{ dns_server }}
+{% endfor %}
