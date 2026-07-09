@@ -350,11 +350,12 @@
   when: tenant.network.ipv4 is defined
 
 - name: "Check current tenant static netplan :: {{ tenant.name }}"
-  ansible.builtin.command: >
-    incus exec {{ tenant.name }} --
-    cmp -s /etc/netplan/10-lxc.yaml -
+  ansible.builtin.shell: >
+    set -o pipefail &&
+    incus file pull {{ tenant.name }}/etc/netplan/10-lxc.yaml - 2>/dev/null
+    | cmp -s - /tmp/{{ tenant.name }}-10-lxc.yaml
   args:
-    stdin: "{{ lookup('ansible.builtin.file', '/tmp/' ~ tenant.name ~ '-10-lxc.yaml') }}"
+    executable: /bin/bash
   register: tenant_static_netplan_compare
   changed_when: false
   failed_when: false
