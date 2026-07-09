@@ -171,6 +171,11 @@ admin path.
   network topology simple enough that the neighbor test is easy to reason
   about and repeat.
 
+  References:
+
+  - Incus network ACLs: <https://linuxcontainers.org/incus/docs/main/howto/network_acls/>
+  - Incus bridge networks: <https://linuxcontainers.org/incus/docs/main/reference/network_bridge/>
+
 ## 3 · Detection: knowing something's wrong
 
 - **Auditd on the host** for the events that matter:

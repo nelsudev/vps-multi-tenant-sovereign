@@ -167,3 +167,10 @@ systemctl --user enable --now cloudflared
 
 Expected result: `cloudflared tunnel info tenant-a` reports connected, and the
 hostname routes to the tenant service.
+
+## References
+
+- Incus network ACLs:
+  <https://linuxcontainers.org/incus/docs/main/howto/network_acls/>
+- Incus bridge networks:
+  <https://linuxcontainers.org/incus/docs/main/reference/network_bridge/>
