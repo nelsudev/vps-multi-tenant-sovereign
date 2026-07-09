@@ -35,6 +35,7 @@
         if incus_tenant_network_mode == 'dedicated_bridge'
         else incus_network
       }}
+    tenant_network_gateway_ipv4: "{{ tenant.network.bridge_ipv4 | regex_replace('/.*$', '') }}"
     tenant_private_egress_acl_name: "{{ tenant.name }}-deny-private"
 
 - name: "Validate tenant private egress ACL name :: {{ tenant.name }}"
@@ -94,6 +95,37 @@
         else []
       }}
   when: tenant.network.deny_private_egress | default(true) | bool
+
+- name: "Set existing private egress ACL DNS allows :: {{ tenant.name }}"
+  ansible.builtin.set_fact:
+    tenant_private_egress_acl_dns_allows: >-
+      {{
+        (
+          (tenant_private_egress_acl_show.stdout | from_yaml).egress
+          | default([], true)
+          | selectattr('action', 'equalto', 'allow')
+          | selectattr('destination', 'equalto', tenant_network_gateway_ipv4 ~ '/32')
+          | selectattr('destination_port', 'equalto', '53')
+          | map(attribute='protocol')
+          | list
+        )
+        if tenant_private_egress_acl_show.rc == 0
+        else []
+      }}
+  when: tenant.network.deny_private_egress | default(true) | bool
+
+- name: "Allow DNS to tenant bridge gateway in private egress ACL :: {{ tenant.name }}"
+  ansible.builtin.command: >
+    incus network acl rule add {{ tenant_private_egress_acl_name }} egress
+    action=allow destination={{ tenant_network_gateway_ipv4 }}/32
+    protocol={{ item }} destination_port=53
+  loop:
+    - udp
+    - tcp
+  changed_when: true
+  when:
+    - tenant.network.deny_private_egress | default(true) | bool
+    - item not in tenant_private_egress_acl_dns_allows
 
 - name: "Reject private egress ranges in tenant ACL :: {{ tenant.name }}"
   ansible.builtin.command: >
@@ -316,6 +348,23 @@
       {{ tenant_network_acl_effective.stdout | default('<unset>') }},
       expected {{ tenant_private_egress_acl_name }}.
   when: tenant.network.deny_private_egress | default(true) | bool
+
+- name: "Restart tenant after network configuration :: {{ tenant.name }}"
+  ansible.builtin.command: "incus restart {{ tenant.name }}"
+  changed_when: false
+
+- name: "Wait for tenant IPv4 after network configuration :: {{ tenant.name }}"
+  ansible.builtin.shell: >
+    set -o pipefail &&
+    incus list {{ tenant.name }} -c 4 --format csv |
+    grep -Eq '([0-9]{1,3}\.){3}[0-9]{1,3}'
+  args:
+    executable: /bin/bash
+  changed_when: false
+  register: tenant_ipv4_wait
+  retries: 12
+  delay: 5
+  until: tenant_ipv4_wait.rc == 0
 
 - name: "Enable daily container snapshots :: {{ tenant.name }}"
   ansible.builtin.command: >
