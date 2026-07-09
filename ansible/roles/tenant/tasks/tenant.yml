@@ -407,6 +407,12 @@
     apt-get update
   changed_when: false
 
+- name: "Repair interrupted package configuration inside container :: {{ tenant.name }}"
+  ansible.builtin.command: >
+    incus exec {{ tenant.name }} --
+    dpkg --configure -a
+  changed_when: false
+
 - name: "Install tenant runtime packages :: {{ tenant.name }}"
   ansible.builtin.command: >
     incus exec {{ tenant.name }} --
