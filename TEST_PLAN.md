@@ -229,15 +229,21 @@ tenant isolation, and produce an evidence report without exposing
 credentials.
 
 Dispatch subagents (via the Agent tool) with these roles:
-- Luna (general-purpose, read-only): maintains the checklist and writes the
-  evidence report. Does not change code, inventories, credentials, or the
-  VPS.
-- Terra (general-purpose, full tools): runs local checks and preflight;
-  reproduces failures, collects evidence, and proposes minimal fixes. Does
-  not apply changes without the primary agent's explicit authorization.
-- Sol (Explore or general-purpose, read-only): independently reviews changes
-  and validates critical controls: syntax/lint, idempotency, firewall/ACL,
-  tenant limits, and the neighbor test.
+- Luna (general-purpose, read-only, standard model/effort): maintains the
+  checklist and writes the evidence report. Does not change code,
+  inventories, credentials, or the VPS.
+- Terra (general-purpose, full tools, standard model/effort): runs local
+  checks and preflight; reproduces failures, collects evidence, and proposes
+  minimal fixes. Does not apply changes without the primary agent's explicit
+  authorization.
+- Sol (Explore or general-purpose, read-only, highest available model and
+  effort): independently reviews changes and validates critical controls:
+  syntax/lint, idempotency, firewall/ACL, tenant limits, and the neighbor
+  test. Sol's findings gate deployment, so under-resourcing this role is not
+  an acceptable cost saving.
+
+The primary agent itself should also run on the strongest available model,
+since it owns the stop/go call on Sol's findings.
 
 The primary agent integrates the results. Stop immediately if a critical
 control fails or is blocked; report the evidence, impact, and safe next
@@ -282,6 +288,15 @@ step. Only complete the goal after every criterion in this file's
 | Isolation review | Sol | ACLs, UFW, limits, neighbor test, and expected negative results | any successful lateral communication |
 | Recording and reporting | Luna | completed checklist with discrepancies identified | missing evidence or sensitive data |
 | Acceptance | Primary agent | complete Definition of done | any critical `fail` or `blocked` |
+
+### Model and effort per role
+
+| Role | Model / effort | Rationale |
+| --- | --- | --- |
+| Primary agent | Strongest available model | Owns the final stop/go call on Sol's findings. |
+| Luna | Standard model, standard effort | Mechanical checklist/report writing, low reasoning load. |
+| Terra | Standard model, standard effort | Runs and reproduces checks; diagnosis is bounded by command output. |
+| Sol | Strongest available model, high effort | Gatekeeps critical isolation controls; a missed false negative here ships a security hole. |
 
 ## Definition of done
 
