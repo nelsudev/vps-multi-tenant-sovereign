@@ -213,6 +213,73 @@ incus exec "$tenant_a" -- su - app -c 'rm -f /data/tenant-a-proof.txt; pkill -f 
 incus exec "$tenant_b" -- su - app -c 'rm -f /data/tenant-b-proof.txt; pkill -f tenant-b-process-marker || true; export DOCKER_HOST=unix:///run/user/$(id -u)/docker.sock; docker rm -f tenant-b-docker-marker'
 ```
 
+## 7. Subagent execution procedure
+
+Use this procedure when validation is coordinated by a primary agent. The
+names are working roles and can be assigned to different agents for each run.
+
+### Prompt to start the goal
+
+Copy and paste the following into Codex before starting validation:
+
+```text
+Create the explicit goal:
+"Safely validate this repository's multi-tenant deployment, confirm tenant
+isolation, and produce an evidence report without exposing credentials."
+
+Coordinate subagents with these roles:
+- Luna: maintains the checklist and writes the evidence report. Does not
+  change code, inventories, credentials, or the VPS.
+- Terra: runs local checks and preflight; reproduces failures, collects
+  evidence, and proposes minimal fixes. Does not apply changes without the
+  primary agent's explicit authorization.
+- Sol: independently reviews changes and validates critical controls:
+  syntax/lint, idempotency, firewall/ACL, tenant limits, and the neighbor test.
+
+The primary agent integrates the results. Stop immediately if a critical
+control fails or is blocked; report the evidence, impact, and safe next step.
+Only complete the goal after every criterion in this file's "Definition of
+done" section passes.
+```
+
+1. The primary agent fixes the scope: commit or branch to validate, target
+   inventory, tenant list, maintenance window, and stop criterion. Do not run
+   playbooks on a VPS with irreplaceable Incus state without a backup and
+   rollback plan.
+2. **Luna — documentation and evidence:** turns this plan into a run
+   checklist and records commands, time, target, and expected versus actual
+   results. Luna does not change Ansible, the inventory, or the VPS. At the
+   end, Luna produces a short report that marks every check `pass`, `fail`, or
+   `blocked`.
+3. **Terra — diagnosis and remediation:** runs local checks first and then the
+   SSH preflight. On failure, Terra reproduces it, keeps the relevant output,
+   identifies the likely cause, and proposes a minimal fix. Terra changes files
+   or the host only when authorized by the primary agent; after each fix, Terra
+   reruns the failed check and directly affected checks.
+4. **Sol — independent review:** checks the plan, Ansible configuration, and
+   Terra's outputs. Sol runs or requests a second validation of critical
+   controls: syntax/lint, idempotency, firewall/ACL, tenant limits, and the
+   neighbor test. Alternative solutions are acceptable only when they preserve
+   the isolation requirements and are documented.
+5. The primary agent integrates the results. A `fail` or `blocked` critical
+   control stops the apply and is reported with evidence, impact, proposed
+   remediation, and the next safe command. Do not mark the run complete based
+   on an untested fix.
+6. Only after Luna, Terra, and Sol agree on the evidence does the primary
+   agent run the **Definition of done** section and archive the report.
+   Credentials, private IP addresses, Cloudflare tokens, and real inventory
+   contents must never enter the report or Git.
+
+### Responsibility matrix
+
+| Phase | Owner | Minimum evidence | Stop rule |
+| --- | --- | --- | --- |
+| Local checks | Terra | output from section 1 commands | any command exits other than `0` |
+| Preflight and apply | Terra | `pong`, host details, playbook output, and second run | Ansible failure or unsupported environment |
+| Isolation review | Sol | ACLs, UFW, limits, neighbor test, and expected negative results | any successful lateral communication |
+| Recording and reporting | Luna | completed checklist with discrepancies identified | missing evidence or sensitive data |
+| Acceptance | Primary agent | complete Definition of done | any critical `fail` or `blocked` |
+
 ## Definition of done
 
 A deployment is done only when all of these checks pass:
