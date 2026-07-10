@@ -61,6 +61,102 @@ report instead of continuing on a red check.
 
 ---
 
+## Multi-agent goal test prompt
+
+Use this prompt to test a multi-agent workflow against a **disposable lab
+VPS**. Replace every bracketed value before starting. The primary agent owns
+the target and is the only agent allowed to run provisioning or cleanup
+commands; supporting agents perform read-only validation unless explicitly
+handed a safe, scoped command.
+
+```
+Goal: safely validate this repository's multi-tenant deployment, confirm
+tenant isolation, and produce an evidence report without exposing credentials.
+
+Repository: https://github.com/nelsudev/vps-multi-tenant-sovereign
+Commit or branch: [COMMIT_OR_BRANCH]
+Target: [SSH_HOST_OR_IP], user: [SSH_USER], root/sudo available
+Tenants to validate: [tenant-a, tenant-b]
+
+This is a disposable lab only. Do not use a production host, create cloud
+resources without the operator's explicit cost approval, commit credentials,
+or expose the target IP, inventory, keys, or tokens in evidence.
+
+Read TEST_PLAN.md, GUIDE.md, SECURITY.md, CLAUDE.md, and
+HETZNER_TEST_GUIDE.md before doing any work. Create the parent goal:
+"Validate isolated multi-tenant deployment at [COMMIT_OR_BRANCH]".
+
+Dispatch agents with these roles and model budgets:
+
+- Luna — cheapest available general-purpose model, read-only. Maintain the
+  checklist and evidence record. Do not modify code, inventories, credentials,
+  or the VPS.
+- Terra — cheapest available general-purpose model with shell access. Follow
+  the TEST_PLAN.md steps in order: local checks, SSH preflight, apply twice,
+  host validation, tenant validation, and the neighbor test. Terra may collect
+  evidence and reproduce a failure, but may not change the repository or VPS
+  without explicit primary-agent authorization.
+- Sol — strongest available model with high reasoning effort, read-only by
+  default. Do not start Sol for successful routine steps. Escalate to Sol only
+  when Terra reports a `fail` or `blocked` result, conflicting evidence, an
+  unexpected security-relevant result, or an unclear remediation. Sol must
+  explain the likely cause from the evidence, identify the affected control,
+  assess the security impact, and propose the smallest safe correction and
+  exact retest commands. Sol must never suggest weakening isolation, disabling
+  AppArmor, enabling privileged containers, removing mandatory limits, or
+  bypassing ACL/firewall controls to obtain a pass.
+
+The primary agent is the only agent allowed to authorize a correction, run a
+mutating command against the VPS, or accept the final goal. Never allow two
+agents to mutate the same VPS, inventory, or tenant state concurrently.
+
+Execution protocol:
+
+1. Luna creates a checklist from TEST_PLAN.md's Definition of done, recording
+   owner, command, expected result, actual result, status, and evidence link
+   for every item.
+2. Terra runs all local checks. Any non-zero exit is `fail`; stop the dependent
+   deployment step and hand Luna the output.
+3. If local checks pass, Terra runs SSH preflight. Require `pong`, working
+   privilege escalation, and `/sys/fs/cgroup`. Otherwise mark `blocked` or
+   `fail` and escalate to Sol.
+4. Only after a clean preflight, the primary agent authorizes Terra to run the
+   playbook twice. A failed run, an unsupported environment, or an unexpected
+   tenant restart on unchanged static netplan stops the run and triggers Sol.
+5. Terra runs the TEST_PLAN.md host, tenant, and neighbor validations. A
+   successful lateral ping, visible neighbour marker, privileged tenant,
+   missing mandatory limit, missing private-egress ACL, or missing ZFS quota
+   is a critical `fail`; do not continue to acceptance.
+6. For any escalation, give Sol the failed command, exit code, relevant
+   redacted output, commit, environment facts, previous successful checks,
+   and recent diff. Sol returns: probable root cause; confidence and missing
+   evidence; minimal safe remediation; files/host state affected; risks; and
+   the exact failed and adjacent checks to rerun.
+7. The primary agent either rejects Sol's recommendation or explicitly
+   authorizes a narrow remediation. Terra applies only that authorized change,
+   then reruns the failed check and all directly affected TEST_PLAN.md checks.
+   Preserve the original failure and the retest result in the evidence record.
+8. Luna marks every criterion `pass`, `fail`, or `blocked`. The primary agent
+   accepts the parent goal only if all Definition-of-done criteria pass with
+   evidence. A partial run is never a pass.
+
+Report format for every handoff:
+
+- agent role and model tier;
+- assigned scope and commands run;
+- expected result, actual result, status, and redacted evidence location;
+- for failures: impact, probable cause, approved remediation, and retest;
+- cleanup performed, including removal of temporary marker files, processes,
+  and Docker containers.
+
+Publish the consolidated report to [WIKI_PAGE_OR_REPORT_PATH]. It must include
+the date, commit, lab environment, tenant scope, all handoffs, final decision,
+remaining manual actions, and safe reproduction commands. It must not include
+credentials, private inventory values, tokens, or target IP addresses.
+```
+
+---
+
 ## Notes on using this
 
 - **Claude Code** picks up `.claude/skills/new-tenant` and
