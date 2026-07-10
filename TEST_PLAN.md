@@ -213,6 +213,29 @@ incus exec "$tenant_a" -- su - app -c 'rm -f /data/tenant-a-proof.txt; pkill -f 
 incus exec "$tenant_b" -- su - app -c 'rm -f /data/tenant-b-proof.txt; pkill -f tenant-b-process-marker || true; export DOCKER_HOST=unix:///run/user/$(id -u)/docker.sock; docker rm -f tenant-b-docker-marker'
 ```
 
+## Goal execution record
+
+Every goal-driven test run must leave a durable execution record. Store the
+final report in the repository wiki unless the goal explicitly requires a
+versioned report in the repository.
+
+Record at least:
+
+- test date, repository commit, target environment, tenant scope, and the
+  goal being validated;
+- commands and checks run, expected result, actual result, and relevant output
+  or links to evidence;
+- failures, remediation attempted, retest result, remaining limitations, and
+  cleanup performed;
+- a final `pass`, `fail`, or `blocked` decision against this plan's Definition
+  of done.
+
+When multiple agents participate, record each agent's role, assigned task,
+result, evidence location, and handoff. For example: Luna maintains the test
+record, Terra reproduces and remediates failures, Sol independently reviews
+critical controls, and the primary agent accepts or rejects the goal. Do not
+record credentials, tokens, or private inventory values in the report.
+
 ## Definition of done
 
 A deployment is done only when all of these checks pass:
