@@ -76,6 +76,19 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/):
   - `feat(ansible): add cloudflared config skeleton to tenant role`
   - `fix(ansible): correct idmap check in tenant role`
 
+### Required commitlint check
+
+Before creating or amending every commit, validate its message with
+`commitlint` from the repository root:
+
+```bash
+printf '%s\n' 'docs(scope): add short summary' | npx --yes @commitlint/cli
+```
+
+Do not create the commit if this command fails. The configuration in
+`commitlint.config.cjs` is the source of truth; update it together with this
+section if the project adopts additional commit types or rules.
+
 ## Hard rules
 
 - Never commit real Cloudflare tunnel credentials, VPS IPs, or an
